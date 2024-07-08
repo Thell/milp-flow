@@ -74,49 +74,26 @@ def create_city_warehouse_worker_counts(data, edge_vars):
     }
 
 
-def main():
-    data = read_sample_empire_from_json()
-    edges = data["edges"]
-
-    # Identify all nodes involved in edges.
-    nodes = set()
-    for edge in edges:
-        nodes.add(edge["source"])
-        nodes.add(edge["destination"])
-
-    # Create the LP problem
-    prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
-
-    # Create binary variables for each edge flow condition.
-    edge_vars = create_edge_vars(data)
-
-    # Create binary variables to represent the load condition.
-    has_load_vars = create_has_load_vars(nodes)
-
-    # Create continuous dynamic load variables for each transit node's active load.
-    load_vars = create_load_vars(nodes)
-
-    # Create active_prod node costs variable.
-    active_prod_cost = create_active_node_cost_var(data, edge_vars)
-
-    # Create active_prod count per city variables for city worker equality.
-    city_active_prod_count = create_city_active_prod_counts(data, edge_vars)
-
-    # Create active worker per city count variables for active_prod equality.
-    city_warehouse_worker_count = create_city_warehouse_worker_counts(data, edge_vars)
-
-    # Objective function: Maximize the total value of active production flows.
+def add_objective_function(prob, data, edge_vars, active_prod_cost, has_load_vars):
+    """Add the objective function to the problem.
+    The objective is to maximize production value and minimize cost.
+    Minimizing the cost is mostly done via constraints.
+    """
     prob += (
         pulp.lpSum(
             edge["value"] * edge_vars[(edge["source"], edge["destination"])]
-            for edge in edges
+            for edge in data["edges"]
             if "value" in edge and edge["destination"].startswith("active_prod_")
         )
         - active_prod_cost
         - pulp.lpSum(node["cost"] * 100 * has_load_vars[node["node"]] for node in data["nodes"])
     )
 
-    # Cost constraint: Ensure total cost does not exceed a max_cost.
+
+def add_cost_constraint(prob, data, active_prod_cost, has_load_vars):
+    """Add the cost constraint to the problem.
+    Constraint should ensure total cost <= max_cost from data.
+    """
     prob += (
         pulp.lpSum(
             active_prod_cost + (node["cost"] * has_load_vars[node["node"]] for node in data["nodes"])
@@ -125,8 +102,12 @@ def main():
         "Max_cost_constraint",
     )
 
-    # Prod Node Activation Constraint: Ensure only one city can activate a prod node.
-    for edge in edges:
+
+def add_prod_node_activation_constraint(prob, data, edge_vars):
+    """Add the prod node activation constraint to the problem.
+    Constraint should ensure only a single node can activate a production node.
+    """
+    for edge in data["edges"]:
         if edge["destination"].startswith("active_prod_"):
             prob += (
                 pulp.lpSum(
@@ -138,7 +119,11 @@ def main():
                 f"Inbound_from_{edge['source']}_to_{edge['destination']}",
             )
 
-    # Flow Conservation Constraints.
+
+def add_flow_conservation_constraints(prob, nodes, edge_vars, data, load_vars):
+    """Add flow conservation constraints to the problem.
+    Constraints should ensure flow conservation for active prod and transit nodes.
+    """
     for node in nodes:
         inbound_edges = [edge for edge in data["edges"] if edge["destination"] == node]
         outbound_edges = [edge for edge in data["edges"] if edge["source"] == node]
@@ -172,7 +157,11 @@ def main():
                 f"Flow_conservation_for_{node}",
             )
 
-    # Link Constraint: Ensure binary has_load_vars[node] is linked to continuous load_vars[node] > 0.
+
+def add_link_constraint(prob, nodes, load_vars, has_load_vars, data):
+    """Add link constraint to the problem.
+    Constraint should ensure binary has_load_vars is linked to continuous load_vars > 0.
+    """
     for node in nodes:
         if node in load_vars:
             prob += (
@@ -180,7 +169,11 @@ def main():
                 f"Link_load_to_has_load_{node}_upper",
             )
 
-    # City Inbound Constraint: Ensure load city transit nodes receive are >= city active prod nodes.
+
+def add_city_inbound_constraint(prob, data, load_vars, city_active_prod_count):
+    """Add city inbound constraint to the problem.
+    Constraint should ensure load at city transit nodes equals the city's active prod count.
+    """
     for city in data["cities"]:
         transit_node = f"transit_{city}"
         prob += (
@@ -188,29 +181,98 @@ def main():
             f"Load_at_{transit_node}_must_be_at_least_active_prod_count",
         )
 
-    # Production workers constraint: ensure each city's active prod node has an active worker.
+
+def add_city_worker_balance_constraint(
+    prob, city_active_prod_count, city_warehouse_worker_count, data
+):
+    """Add production workers constraint to ensure each city's active prod node has an active worker.
+    Constraint should ensure each city's worker node count equals the city's active prod count.
+    """
     for city in data["cities"]:
         prob += (
             city_active_prod_count[city] == city_warehouse_worker_count[city],
             f"City_{city}_balance",
         )
 
-    # Source to Sink Constraint through Transit Nodes.
+
+def add_source_to_sink_constraint(prob, nodes, edge_vars, data):
+    """Add source to sink constraint through transit nodes.
+    Constraint should ensure overall toal source to sink connectivity.
+    """
     for node in nodes:
         if node.startswith("transit_"):
             prob += (
                 pulp.lpSum(
                     edge_vars[(edge["source"], edge["destination"])]
-                    for edge in edges
+                    for edge in data["edges"]
                     if edge["destination"] == node
                 )
                 >= pulp.lpSum(
                     edge_vars[(edge["source"], edge["destination"])]
-                    for edge in edges
+                    for edge in data["edges"]
                     if edge["source"] == node
                 ),
                 f"Flow_through_transit_{node}",
             )
+
+
+def main():
+    data = read_sample_empire_from_json()
+    edges = data["edges"]
+
+    # Identify all nodes involved in edges.
+    nodes = set()
+    for edge in edges:
+        nodes.add(edge["source"])
+        nodes.add(edge["destination"])
+
+    # Create the LP problem
+    prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
+
+    # Create binary variables for each edge flow condition.
+    edge_vars = create_edge_vars(data)
+
+    # Create binary variables to represent the load condition.
+    has_load_vars = create_has_load_vars(nodes)
+
+    # Create continuous dynamic load variables for each transit node's active load.
+    load_vars = create_load_vars(nodes)
+
+    # Create active_prod node costs variable.
+    active_prod_cost = create_active_node_cost_var(data, edge_vars)
+
+    # Create active_prod count per city variables for city worker equality.
+    city_active_prod_count = create_city_active_prod_counts(data, edge_vars)
+
+    # Create active worker per city count variables for active_prod equality.
+    city_warehouse_worker_count = create_city_warehouse_worker_counts(data, edge_vars)
+
+    # The objective is to maximize production value and minimize cost.
+    # Minimizing the cost is mostly done via constraints.
+    add_objective_function(prob, data, edge_vars, active_prod_cost, has_load_vars)
+
+    # Add constraint to ensure total cost <= max_cost from data.
+    add_cost_constraint(prob, data, active_prod_cost, has_load_vars)
+
+    # Add constraint to ensure only a single node can activate a production node.
+    add_prod_node_activation_constraint(prob, data, edge_vars)
+
+    # Add constraints to ensure flow conservation for active prod and transit nodes.
+    add_flow_conservation_constraints(prob, nodes, edge_vars, data, load_vars)
+
+    # Add constraint to ensure binary has_load_vars is linked to continuous load_vars > 0.
+    add_link_constraint(prob, nodes, load_vars, has_load_vars, data)
+
+    # Add constraint to ensure load at city transit nodes equals the city's active prod count.
+    add_city_inbound_constraint(prob, data, load_vars, city_active_prod_count)
+
+    # Add constraint to ensure each city's worker node count equals the city's active prod count.
+    add_city_worker_balance_constraint(
+        prob, city_active_prod_count, city_warehouse_worker_count, data
+    )
+
+    # Add constraint to ensure overall toal source to sink connectivity.
+    add_source_to_sink_constraint(prob, nodes, edge_vars, data)
 
     # Solve the problem
     prob.solve()
