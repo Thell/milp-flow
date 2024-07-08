@@ -197,7 +197,7 @@ def add_city_worker_balance_constraint(
 
 def add_source_to_sink_constraint(prob, nodes, edge_vars, data):
     """Add source to sink constraint through transit nodes.
-    Constraint should ensure overall toal source to sink connectivity.
+    Constraint should ensure overall total source to sink connectivity.
     """
     for node in nodes:
         if node.startswith("transit_"):
@@ -247,31 +247,25 @@ def main():
     # Create active worker per city count variables for active_prod equality.
     city_warehouse_worker_count = create_city_warehouse_worker_counts(data, edge_vars)
 
-    # The objective is to maximize production value and minimize cost.
-    # Minimizing the cost is mostly done via constraints.
+    # Add the objective function to the problem.
     add_objective_function(prob, data, edge_vars, active_prod_cost, has_load_vars)
 
-    # Add constraint to ensure total cost <= max_cost from data.
+    # Add constraints to the problem.
+    # Constraint to ensure total cost <= max_cost from data.
     add_cost_constraint(prob, data, active_prod_cost, has_load_vars)
-
-    # Add constraint to ensure only a single node can activate a production node.
+    # Constraint to ensure only a single node can activate a production node.
     add_prod_node_activation_constraint(prob, data, edge_vars)
-
-    # Add constraints to ensure flow conservation for active prod and transit nodes.
+    # Constraints to ensure flow conservation for active prod and transit nodes.
     add_flow_conservation_constraints(prob, nodes, edge_vars, data, load_vars)
-
-    # Add constraint to ensure binary has_load_vars is linked to continuous load_vars > 0.
+    # Constraint to ensure binary has_load_vars is linked to continuous load_vars > 0.
     add_link_constraint(prob, nodes, load_vars, has_load_vars, data)
-
-    # Add constraint to ensure load at city transit nodes equals the city's active prod count.
+    # Constraint to ensure load at city transit nodes equals the city's active prod count.
     add_city_inbound_constraint(prob, data, load_vars, city_active_prod_count)
-
-    # Add constraint to ensure each city's worker node count equals the city's active prod count.
+    # Constraint to ensure each city's worker node count equals the city's active prod count.
     add_city_worker_balance_constraint(
         prob, city_active_prod_count, city_warehouse_worker_count, data
     )
-
-    # Add constraint to ensure overall toal source to sink connectivity.
+    # Constraint to ensure overall total source to sink connectivity.
     add_source_to_sink_constraint(prob, nodes, edge_vars, data)
 
     # Solve the problem
