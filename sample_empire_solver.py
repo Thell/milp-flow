@@ -1,16 +1,7 @@
-import json
-import os
 import pulp
 
-from generate_output import print_solver_output
-
-
-def read_sample_empire_from_json(filename="sample_empire.json"):
-    """Read the sample empire data from a JSON file."""
-    filepath = os.path.join(os.path.dirname(__file__), "data", filename)
-    with open(filepath, "r") as file:
-        data = json.load(file)
-    return data
+from file_utils import read_sample_json
+from print_utils import print_solver_output
 
 
 def create_edge_vars(data):
@@ -31,7 +22,7 @@ def create_edge_load_vars(data):
     return edge_load_vars
 
 
-def create_load_vars(nodes):
+def create_node_load_vars(nodes):
     """Create continuous dynamic load variables for each transit node's active load."""
     load_vars = {}
     for node in nodes:
@@ -40,7 +31,7 @@ def create_load_vars(nodes):
     return load_vars
 
 
-def create_has_load_vars(nodes):
+def create_node_has_load_vars(nodes):
     """Create binary variables to represent the load condition."""
     has_load_vars = {}
     for node in nodes:
@@ -127,7 +118,7 @@ def add_objective_function(prob, data, edge_vars, active_prod_cost, has_load_var
         for edge in data["edges"]
         if "value" in edge and edge["destination"].startswith("active_prod_")
     )
-    transit_cost = pulp.lpSum(has_load_vars[node["node"]] for node in data["nodes"])
+    transit_cost = pulp.lpSum(node["cost"] * has_load_vars[node["node"]] for node in data["nodes"])
     prob += total_value - transit_cost, "ObjectiveFunction"
 
 
@@ -368,7 +359,7 @@ def add_source_to_sink_constraint(prob, nodes, edge_vars, data):
 
 
 def main():
-    data = read_sample_empire_from_json()
+    data = read_sample_json("sample_empire.json")
     edges = data["edges"]
 
     # Identify all nodes involved in edges.
@@ -439,8 +430,8 @@ def main():
     # Create solver variables.
     edge_vars = create_edge_vars(data)
     edge_load_vars = create_edge_load_vars(data)
-    has_load_vars = create_has_load_vars(nodes)
-    load_vars = create_load_vars(nodes)
+    has_load_vars = create_node_has_load_vars(nodes)
+    load_vars = create_node_load_vars(nodes)
     city_active_prod_count = create_city_active_prod_counts(data, edge_vars)
     city_warehouse_worker_count = create_city_warehouse_worker_counts(data, edge_vars)
     active_prod_cost = create_active_prod_cost_var(data, edge_vars)

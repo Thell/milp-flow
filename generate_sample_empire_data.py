@@ -67,27 +67,7 @@
 # The goal will be to conserve the flow from source to sink and maximize the value of production
 # node supplies reaching the warehouses with a hard limit on the upper bounds of total cost.
 
-import json
-import os
-
-
-def read_data_json(data_path, filename):
-    filepath = os.path.join(os.path.dirname(__file__), "data", data_path, filename)
-    with open(filepath, "r") as file:
-        return json.load(file)
-
-
-def read_user_json(filename):
-    return read_data_json("user", filename)
-
-
-def read_workerman_json(filename):
-    return read_data_json("workerman", filename)
-
-
-def read_sample_json(filename):
-    return read_data_json("sample", filename)
-
+from file_utils import read_workerman_json, read_sample_json, write_sample_json
 
 DECK_LINKS = read_workerman_json("deck_links.json")
 EXPLORATION_NODE_DATA = read_workerman_json("exploration.json")
@@ -143,10 +123,7 @@ def save_sample_empire_to_json(
         "num_production_nodes": num_production_nodes,
     }
 
-    filename = os.path.join(os.path.dirname(__file__), "data", filename)
-    with open(filename, "w") as file:
-        json.dump(data, file, indent=4)
-
+    write_sample_json(filename, data)
     print(f"Data saved to {filename}")
 
 
@@ -302,7 +279,7 @@ for edge in edges:
 sink_demand = num_production_nodes
 
 # This will be the max cost constraint in the MILP model.
-max_cost = 50
+max_cost = 36
 
 save_sample_empire_to_json(
     edges,
