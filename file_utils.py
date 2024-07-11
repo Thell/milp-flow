@@ -12,6 +12,7 @@ def write_data_json(data_sub_path, filename, data):
     filepath = os.path.join(os.path.dirname(__file__), "data", data_sub_path, filename)
     with open(filepath, "w") as file:
         json.dump(data, file, indent=4)
+    return filepath
 
 
 def read_sample_json(filename):
