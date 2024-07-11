@@ -126,7 +126,7 @@ class Node:
         self.id = id
         self.capacity = capacity
         self.cost = cost
-        self.value = value * 1_000_000
+        self.value = value
 
     def __repr__(self):
         return (

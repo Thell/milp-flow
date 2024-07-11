@@ -2,10 +2,16 @@
 
 from math import ceil
 
-from file_utils import read_workerman_json, read_user_json, write_user_json, write_sample_json
+from file_utils import (
+    read_workerman_json,
+    read_user_json,
+    read_sample_json,
+    write_user_json,
+    write_sample_json,
+)
 
 
-MARKET_VALUE = read_workerman_json("market.json")
+MARKET_VALUE = read_user_json("market.json")
 PLANTZONE = read_workerman_json("plantzone.json")
 PLANTZONE_DROPS = read_workerman_json("plantzone_drops.json")
 WORKER_SKILLS = read_workerman_json("skills.json")
@@ -84,7 +90,7 @@ def profitPzTownStats(pzk, tnk, dist, wspd, mspd, luck, is_giant):
         else price_lerp(luckyValue, unluckyValue, luck)
     )
     cyclesDaily = calcCyclesDaily(drop["workload"], wspd, dist, mspd)
-    priceDaily = cyclesDaily * cycleValue / 1000000
+    priceDaily = cyclesDaily * cycleValue
     return priceDaily
 
 
@@ -245,7 +251,7 @@ def optimize_skills(town, plantzone, dist, worker):
 
 
 def generate_sample_data():
-    SAMPLE_FILTER = read_user_json("sample_filter_nodes.json")
+    SAMPLE_FILTER = read_sample_json("sample_filter_nodes.json")
     output = {}
     for town in DISTANCES_TK2PZK.keys():
         if town not in SAMPLE_FILTER["towns"]:
@@ -314,10 +320,12 @@ def generate_full_data():
 
 def main():
     data = generate_sample_data()
-    write_sample_json("sample_node_values_per_town.json", data)
+    filepath = write_sample_json("sample_node_values_per_town.json", data)
+    print(f"Wrote sample node values to {filepath}.")
 
     data = generate_full_data()
     write_user_json("node_values_per_town.json", data)
+    print(f"Wrote full node values to {filepath}.")
 
 
 if __name__ == "__main__":
