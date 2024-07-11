@@ -1,30 +1,20 @@
 ### Optimized Worker Production Node Valuations Per Town
 
-import json
-import os
-import math
+from math import ceil
+
+from file_utils import read_workerman_json, read_user_json, write_user_json, write_sample_json
 
 
-def read_data_json(file):
-    filepath = os.path.join(os.path.dirname(__file__), "data", file)
-    with open(filepath, "r") as file:
-        return json.load(file)
-
-
-DISTANCES_TK2PZK = read_data_json("distances_tk2pzk.json")
+MARKET_VALUE = read_workerman_json("market.json")
+PLANTZONE = read_workerman_json("plantzone.json")
+PLANTZONE_DROPS = read_workerman_json("plantzone_drops.json")
+WORKER_SKILLS = read_workerman_json("skills.json")
+WORKER_STATIC = read_workerman_json("worker_static.json")
+DISTANCES_TK2PZK = read_workerman_json("distances_tk2pzk.json")
 
 # A fix for ordering since workerman sorts by nearest node to town.
-# for town in DISTANCES_TK2PZK:
-#     DISTANCES_TK2PZK[town] = sorted(DISTANCES_TK2PZK[town], key=lambda x: x[0])
-# filepath = os.path.join(os.path.dirname(__file__), "data", "distances_tk2pzk.json")
-# with open(filepath, "w") as file:
-#     json.dump(DISTANCES_TK2PZK, file, sort_keys=False, indent=4, ensure_ascii=True)
-
-MARKET_VALUE = read_data_json("market.json")
-PLANTZONE = read_data_json("plantzone.json")
-PLANTZONE_DROPS = read_data_json("plantzone_drops.json")
-WORKER_SKILLS = read_data_json("skills.json")
-WORKER_STATIC = read_data_json("worker_static.json")
+for town in DISTANCES_TK2PZK:
+    DISTANCES_TK2PZK[town] = sorted(DISTANCES_TK2PZK[town], key=lambda x: x[0])
 
 
 def isGiant(charkey):
@@ -54,7 +44,7 @@ def worker_stats(worker, skill_set):
 def calcCyclesDaily(baseWorkload, wspd, dist, mspd):
     moveMinutes = 2 * dist / mspd / 60
     activeWorkload = baseWorkload * 2
-    workMinutes = math.ceil(activeWorkload / wspd)
+    workMinutes = ceil(activeWorkload / wspd)
     cycleMinutes = 10 * workMinutes + moveMinutes
     return 24 * 60 / cycleMinutes
 
@@ -254,40 +244,81 @@ def optimize_skills(town, plantzone, dist, worker):
     return step_results[0]
 
 
-SAMPLE_FILTER = read_data_json("sample_filter_nodes.json")
-output = {}
-for town in DISTANCES_TK2PZK.keys():
-    if town not in SAMPLE_FILTER["towns"]:
-        continue
-
-    if str(town) not in output:
-        output[str(town)] = {}
-
-    median_giant = medianGiant(town)
-    median_goblin = medianGoblin(town)
-    median_human = medianHuman(town)
-
-    for data in DISTANCES_TK2PZK[town]:
-        plantzone, dist = data
-        if plantzone not in SAMPLE_FILTER["production_nodes"]:
-            continue
-        if not PLANTZONE[str(plantzone)]["node"]["is_plantzone"]:
-            continue
-        if PLANTZONE[str(plantzone)]["node"]["kind"] in [12, 13]:
+def generate_sample_data():
+    SAMPLE_FILTER = read_user_json("sample_filter_nodes.json")
+    output = {}
+    for town in DISTANCES_TK2PZK.keys():
+        if town not in SAMPLE_FILTER["towns"]:
             continue
 
-        optimized_workers = {
-            "giant": optimize_skills(town, plantzone, dist, median_giant),
-            "goblin": optimize_skills(town, plantzone, dist, median_goblin),
-            "human": optimize_skills(town, plantzone, dist, median_human),
-        }
-        optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
+        if str(town) not in output:
+            output[str(town)] = {}
 
-        output[str(town)][str(plantzone)] = {}
-        output[str(town)][str(plantzone)]["worker"] = optimized_worker[0]
-        output[str(town)][str(plantzone)]["skills"] = optimized_worker[1]["skills"]
-        output[str(town)][str(plantzone)]["value"] = optimized_worker[1]["profit"]
+        median_giant = medianGiant(town)
+        median_goblin = medianGoblin(town)
+        median_human = medianHuman(town)
 
-filepath = os.path.join(os.path.dirname(__file__), "data", "sample_node_values_per_city.json")
-with open(filepath, "w") as outfile:
-    json.dump(output, outfile, indent=4)
+        for data in DISTANCES_TK2PZK[town]:
+            plantzone, dist = data
+            if plantzone not in SAMPLE_FILTER["production_nodes"]:
+                continue
+            if not PLANTZONE[str(plantzone)]["node"]["is_plantzone"]:
+                continue
+            if PLANTZONE[str(plantzone)]["node"]["kind"] in [12, 13]:
+                continue
+
+            optimized_workers = {
+                "giant": optimize_skills(town, plantzone, dist, median_giant),
+                "goblin": optimize_skills(town, plantzone, dist, median_goblin),
+                "human": optimize_skills(town, plantzone, dist, median_human),
+            }
+            optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
+
+            output[str(town)][str(plantzone)] = {}
+            output[str(town)][str(plantzone)]["worker"] = optimized_worker[0]
+            output[str(town)][str(plantzone)]["skills"] = optimized_worker[1]["skills"]
+            output[str(town)][str(plantzone)]["value"] = optimized_worker[1]["profit"]
+    return output
+
+
+def generate_full_data():
+    output = {}
+    for town in DISTANCES_TK2PZK.keys():
+        if str(town) not in output:
+            output[str(town)] = {}
+
+        median_giant = medianGiant(town)
+        median_goblin = medianGoblin(town)
+        median_human = medianHuman(town)
+
+        for data in DISTANCES_TK2PZK[town]:
+            plantzone, dist = data
+            if not PLANTZONE[str(plantzone)]["node"]["is_plantzone"]:
+                continue
+            if PLANTZONE[str(plantzone)]["node"]["kind"] in [12, 13]:
+                continue
+
+            optimized_workers = {
+                "giant": optimize_skills(town, plantzone, dist, median_giant),
+                "goblin": optimize_skills(town, plantzone, dist, median_goblin),
+                "human": optimize_skills(town, plantzone, dist, median_human),
+            }
+            optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
+
+            output[str(town)][str(plantzone)] = {}
+            output[str(town)][str(plantzone)]["worker"] = optimized_worker[0]
+            output[str(town)][str(plantzone)]["skills"] = optimized_worker[1]["skills"]
+            output[str(town)][str(plantzone)]["value"] = optimized_worker[1]["profit"]
+    return output
+
+
+def main():
+    data = generate_sample_data()
+    write_sample_json("sample_node_values_per_town.json", data)
+
+    data = generate_full_data()
+    write_user_json("node_values_per_town.json", data)
+
+
+if __name__ == "__main__":
+    main()
