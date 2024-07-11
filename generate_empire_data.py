@@ -110,8 +110,6 @@
 #  - value: 0
 """
 
-import json
-
 from file_utils import read_workerman_json, read_user_json, write_user_json
 
 
