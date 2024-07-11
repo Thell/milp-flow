@@ -196,8 +196,42 @@ def generate_demand_to_plantzone_data(nodes, edges, plantzone_values_at_towns):
             edges.add(Edge(destination, source, capacity=0))
 
 
+def get_node(node_id, plantzones, town_waypoints, exploration_node_data, num_production_nodes):
+    """Helper waypoint data function to create or retrieve a node based on the id and type."""
+    if node_id in plantzones:
+        return Node(id=f"origin_{node_id}", capacity=1, cost=exploration_node_data[node_id]["CP"])
+    elif node_id in town_waypoints:
+        return Node(
+            id=f"town_{node_id}",
+            capacity=num_production_nodes,
+            cost=exploration_node_data[node_id]["CP"],
+        )
+    else:
+        return Node(
+            id=f"waypoint_{node_id}",
+            capacity=num_production_nodes,
+            cost=exploration_node_data[node_id]["CP"],
+        )
+
+
+def add_edges(a, b, plantzones, num_production_nodes, edges):
+    """Helper waypoint data function to add edges between nodes a and b."""
+    a_is_plantzone = a in plantzones
+    b_is_plantzone = b in plantzones
+
+    if a_is_plantzone:
+        edges.add(Edge(f"origin_{a}", f"waypoint_{b}", capacity=1))
+        edges.add(Edge(f"waypoint_{b}", f"origin_{a}", capacity=0))
+    elif b_is_plantzone:
+        edges.add(Edge(f"waypoint_{a}", f"origin_{b}", capacity=0))
+        edges.add(Edge(f"origin_{b}", f"waypoint_{a}", capacity=1))
+    else:
+        edges.add(Edge(f"waypoint_{a}", f"waypoint_{b}", capacity=num_production_nodes))
+        edges.add(Edge(f"waypoint_{b}", f"waypoint_{a}", capacity=num_production_nodes))
+
+
 def generate_waypoint_data(nodes, edges, plantzone_values_at_towns):
-    """Add waypoint nodes and edges ignore appending waypoint_plantzone nodes."""
+    """Add waypoint nodes and edges ignore appending waypoint plantzone nodes."""
     links = read_workerman_json("deck_links.json")
     exploration_node_data = read_workerman_json("exploration.json")
     town_warehouses = plantzone_values_at_towns.keys()
@@ -206,52 +240,14 @@ def generate_waypoint_data(nodes, edges, plantzone_values_at_towns):
     num_production_nodes = len(plantzones)
 
     for link in links:
-        a = str(link[0])
-        b = str(link[1])
-        a_data = exploration_node_data[a]
-        b_data = exploration_node_data[b]
+        a, b = str(link[0]), str(link[1])
+        node_a = get_node(a, plantzones, town_waypoints, exploration_node_data, num_production_nodes)
+        node_b = get_node(b, plantzones, town_waypoints, exploration_node_data, num_production_nodes)
 
-        node_a = None
-        node_b = None
-        a_is_plantzone = a in plantzones
-        b_is_plantzone = b in plantzones
-        a_is_town_waypoint = a in town_waypoints
-        b_is_town_waypoint = b in town_waypoints
+        nodes.add(node_a)
+        nodes.add(node_b)
 
-        if a_is_plantzone:
-            a = f"origin_{a}"
-        elif a_is_town_waypoint:
-            a = f"town_{a}"
-            node_a = Node(id=a, capacity=num_production_nodes, cost=a_data["CP"])
-            nodes.add(node_a)
-        else:
-            a = f"waypoint_{a}"
-            node_a = Node(id=a, capacity=num_production_nodes, cost=a_data["CP"])
-            nodes.add(node_a)
-
-        if b_is_plantzone:
-            b = f"origin_{b}"
-        elif b_is_town_waypoint:
-            b = f"town_{b}"
-            node_b = Node(id=b, capacity=num_production_nodes, cost=b_data["CP"])
-            nodes.add(node_b)
-        else:
-            b = f"waypoint_{b}"
-            node_b = Node(id=b, capacity=num_production_nodes, cost=b_data["CP"])
-            nodes.add(node_b)
-
-        if a_is_plantzone:
-            edge_a = Edge(a, b, capacity=1)
-            edge_b = Edge(b, a, capacity=0)
-        elif b_is_plantzone:
-            edge_a = Edge(a, b, capacity=0)
-            edge_b = Edge(b, a, capacity=1)
-        else:
-            edge_a = Edge(a, b, capacity=num_production_nodes)
-            edge_b = Edge(b, a, capacity=num_production_nodes)
-
-        edges.add(edge_a)
-        edges.add(edge_b)
+        add_edges(a, b, plantzones, num_production_nodes, edges)
 
 
 def generate_town_to_warehouse_data(nodes, edges, plantzone_values_at_towns):
