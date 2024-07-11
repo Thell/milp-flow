@@ -110,7 +110,15 @@
 #  - value: 0
 """
 
+import sys
+
 from file_utils import read_workerman_json, read_user_json, write_user_json
+
+# Pointer to module object instance to cache module level variables.
+this_module = sys.modules[__name__]
+
+# cache at the module level
+this_module.warehouse_to_waypoint_dict = None  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class Node:
@@ -148,16 +156,11 @@ class Edge:
         return hash((self.source + self.destination))
 
 
-def town_waypoint_to_town_warehouse(id):
-    return str(read_workerman_json("town_node_translate.json")["tnk2tk"].get(str(id), 0))
-
-
 def town_warehouse_to_town_waypoint(id):
-    return str(read_workerman_json("town_node_translate.json")["tk2tnk"].get(str(id), 0))
-
-
-def waypoint_is_town(id):
-    return town_waypoint_to_town_warehouse(id) != 0
+    if this_module.warehouse_to_waypoint_dict is None:
+        data = read_workerman_json("town_node_translate.json")["tnk2tk"]
+        this_module.warehouse_to_waypoint_dict = data  # pyright: ignore[reportAttributeAccessIssue]
+    return str(this_module.warehouse_to_waypoint_dict.get(str(id), 0))
 
 
 def generate_source_to_demand_data(nodes, edges, plantzone_values_at_towns):
@@ -279,7 +282,7 @@ def generate_warehouse_to_lodging_data(nodes, edges, plantzone_values_at_towns, 
         source = f"warehouse_{town_warehouse}"
 
         for capacity, data in town_lodging_data.items():
-            usage_capacity = 1 + (3 * useP2W) + str(int(capacity))
+            usage_capacity = str(1 + (3 * useP2W) + int(capacity))
             if town_warehouse in ["1375", "218", "1382"]:
                 usage_capacity = "0"
 
@@ -330,7 +333,7 @@ def print_sample_edges(edges):
 
 def edges_to_json(edges):
     """format edges for json"""
-    return [
+    data = [
         {
             "source": edge.source,
             "destination": edge.destination,
@@ -338,14 +341,16 @@ def edges_to_json(edges):
         }
         for edge in edges
     ]
+    return sorted(data, key=lambda edge: (edge["source"], edge["destination"]))
 
 
 def nodes_to_json(nodes):
     """format nodes for json"""
-    return [
+    data = [
         {"id": node.id, "capacity": node.capacity, "cost": node.cost, "value": node.value}
         for node in nodes
     ]
+    return sorted(data, key=lambda node: node["id"])
 
 
 def main():
