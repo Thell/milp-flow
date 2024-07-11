@@ -1,6 +1,6 @@
 import pulp
 
-from file_utils import read_sample_json
+from file_utils import read_empire_json
 from print_utils import print_solver_output
 
 
@@ -305,7 +305,7 @@ def add_source_to_sink_constraint(prob, data, nodes, edge_flow_vars):
 
 
 def main():
-    data = read_sample_json("sample_empire.json")
+    data = read_empire_json("sample_empire.json")
     edges = data["edges"]
 
     nodes = set()
@@ -316,7 +316,6 @@ def main():
     prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
 
     edge_flow_vars = create_edge_flow_vars(data)
-    edge_load_vars = create_edge_load_vars(data)
     node_load_vars = create_node_load_vars(nodes)
     node_has_load_vars = create_node_has_load_vars(nodes)
     city_active_prod_counts = create_city_active_prod_counts(data, edge_flow_vars)
@@ -327,19 +326,22 @@ def main():
     add_cost_constraint(prob, data, node_has_load_vars)
     add_prod_node_activation_constraint(prob, data, edge_flow_vars)
     add_transit_node_flow_constraints(prob, data, nodes, edge_flow_vars)
-    add_non_transit_node_flow_constraints(prob, data, nodes, node_load_vars, edge_load_vars)
     add_edge_load_flow_constraints(prob, data, nodes, edge_flow_vars, node_load_vars)
     add_loaded_edge_activation_constraints(prob, data, edge_flow_vars, node_has_load_vars)
     add_loaded_node_activation_constraints(prob, nodes, node_load_vars, node_has_load_vars)
     add_load_has_load_link_constraints(prob, data, nodes, node_load_vars, node_has_load_vars)
-    add_city_inbound_constraints(prob, data, node_load_vars, city_active_prod_counts)
     add_city_worker_balance_constraints(prob, data, city_active_prod_counts, city_worker_counts)
+
+    # Eliminate these
+    edge_load_vars = create_edge_load_vars(data)
+    add_non_transit_node_flow_constraints(prob, data, nodes, node_load_vars, edge_load_vars)
+    add_city_inbound_constraints(prob, data, node_load_vars, city_active_prod_counts)
     add_city_max_worker_constraints(prob, data, city_worker_counts)
 
     add_source_to_sink_constraint(prob, data, nodes, edge_flow_vars)
 
     prob.solve()
-    print_solver_output(prob, data, edge_flow_vars)
+    print_solver_output(prob, data, edge_flow_vars, doFull=True)
 
 
 if __name__ == "__main__":
