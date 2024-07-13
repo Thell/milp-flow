@@ -2,7 +2,7 @@
 Generate the edges and nodes used for MILP optimized node empire solver.
 
 * The model is based on flow conservation where the source outbound load == sink inbound load.
-* All nodes except source have the same "base" inbount constraints.
+* All nodes except source have the same "base" inbound constraints.
 * All nodes except sink have the same "base" outbound constraints.
 * Every edge has a reverse edge with one way flows denoted with a reverse edge capacity of 0.
 * All edges share the same "base" inbound and outbound constraints.
@@ -49,10 +49,10 @@ class Node:
         return f"Node(name: {self.name()}, capacity: {self.capacity}, cost: {self.cost}, value: {self.value})"
 
     def __eq__(self, other) -> bool:
-        return self.id == other.id
+        return self.name() == other.name()
 
     def __hash__(self) -> int:
-        return hash((self.id))
+        return hash((self.name()))
 
 
 class Edge:
@@ -368,7 +368,7 @@ def edges_to_json(edges: Set[Edge]):
 def nodes_to_json(nodes: Set[Node]):
     """format nodes for json"""
     data = [
-        {"id": node.id, "capacity": node.capacity, "cost": node.cost, "value": node.value}
+        {"id": node.name(), "capacity": node.capacity, "cost": node.cost, "value": node.value}
         for node in nodes
     ]
     return sorted(data, key=lambda node: node["id"])
@@ -391,7 +391,12 @@ def main():
     print_sample_edges(edges)
     print(f"Num edges: {len(edges)}, Num nodes: {len(nodes)}")
 
-    data = {"edges": edges_to_json(edges), "nodes": nodes_to_json(nodes)}
+    data = {
+        "edges": edges_to_json(edges),
+        "nodes": nodes_to_json(nodes),
+        "warehouses": list(ref_data["warehouses"]),
+        "plantzones": list(ref_data["plantzones"]),
+    }
     filepath = write_user_json("full_empire.json", data)
     print(f"Empire data written to {filepath}")
 
