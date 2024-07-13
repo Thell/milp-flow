@@ -1,3 +1,5 @@
+"""Solve MILP Worker Node Empire Sample Problem"""
+
 import pulp
 
 from file_utils import read_empire_json
