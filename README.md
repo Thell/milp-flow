@@ -1,10 +1,28 @@
 # CONSTRUCTION ZONE
 ----
 
-Python -> pulp -> COIN MILP
+## Goal: Solve Minimum Cost Multi-Commodity Flow Problem
+
+Attempting to come up with a reasonably efficient solution.
+
+## Python -> pulp -> (coin) cbc
 
 Doesn't scale.
 
-TODO: Try with HiGHS using threads, which still won't scale but would be faster.
+Using a max cost limit of 40 takes just over 10 minutes.
 
-TODO: Try hybrid LP, max flow which should scale but is more complex.
+
+## WSL -> Python -> pulp -> HiGHS
+
+Still shouldn't scale.
+
+Parallel doesn't kick in for the problem even with parallel and threads flags.
+
+Using a max cost limit of 40 takes just under 4 minutes but bumping the cost
+up to 50 requires almost 16 minutes.
+
+## TODO: Try hybrid LP
+
+Should scale better.
+
+More complex.
