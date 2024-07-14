@@ -245,8 +245,11 @@ def save_hash_to_file(hash_value, filename="ref_data_hash.txt"):
 
 
 def load_hash_from_file(filename="ref_data_hash.txt"):
-    with open(filename, "r") as f:
-        return f.read().strip()
+    try:
+        with open(filename, "r") as f:
+            return f.read().strip()
+    except:  # noqa: E722
+        return 0
 
 
 def main(max_cost=40):
