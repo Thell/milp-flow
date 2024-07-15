@@ -1,49 +1,78 @@
 """Empire Data Generation
 Generate the edges and nodes used for MILP optimized node empire solver.
-
-* The model is based on flow conservation where the source outbound load == sink inbound load.
-* All nodes except source have the same "base" inbound constraints.
-* All nodes except sink have the same "base" outbound constraints.
-* Every edge has a reverse edge with one way flows denoted with a reverse edge capacity of 0.
-* All edges share the same "base" inbound and outbound constraints.
-* All edges and nodes have a capacity which the calculated load must not exceed.
 """
 
-from enum import Enum
-from typing import Set, Dict, Any
+from enum import StrEnum, auto
+from typing import Dict, Any
 
-from file_utils import read_workerman_json, read_user_json, write_user_json
+from file_utils import read_workerman_json, read_user_json
 
 
-class NodeType(Enum):
-    SOURCE = "source"
-    DEMAND = "demand"
-    ORIGIN = "origin"
-    WAYPOINT = "waypoint"
-    TOWN = "town"
-    WAREHOUSE = "warehouse"
-    LODGING = "lodging"
-    SINK = "sink"
+class NodeType(StrEnum):
+    SOURCE = auto()
+    DEMAND = auto()
+    ORIGIN = auto()
+    WAYPOINT = auto()
+    TOWN = auto()
+    WAREHOUSE = auto()
+    LODGING = auto()
+    SINK = auto()
+    INVALID = auto()
 
-    def __str__(self):
-        return str(self.value)
-
-    def __repr__(self):
-        return str(self)
+    def from_node(self, ref_data, node):
+        """Identify node type from id in ref_data["waypoint_data"]."""
+        if node in ref_data["towns"]:
+            return self.TOWN
+        if node in ref_data["all_plantzones"]:
+            if node not in ref_data["origins"]:
+                return self.INVALID
+            return self.ORIGIN
+        return self.WAYPOINT
 
 
 class Node:
-    def __init__(self, id: str, type: NodeType, capacity: int, cost: int = 0, value: int = 0):
+    def __init__(
+        self,
+        id: str,
+        type: NodeType,
+        capacity: int,
+        cost: int = 0,
+        value: int = 0,
+        demand_destination_id=None,
+    ):
         self.id = id
         self.type = type
         self.capacity = capacity
         self.cost = cost
         self.value = value
+        self.demand_destination_id = demand_destination_id
+        self.demand_destination_name = (
+            f"warehouse_{demand_destination_id}" if demand_destination_id else None
+        )
+        self.key = self.name()
+        self.inbound_edge_ids = []
+        self.outbound_edge_ids = []
+        self.pulp_vars = {}
 
     def name(self):
         if self.type in [NodeType.SOURCE, NodeType.SINK]:
             return self.id
         return f"{self.type}_{self.id}"
+
+    def as_dict(self):
+        return {
+            "key": self.name(),
+            "name": self.name(),
+            "id": self.id,
+            "type": self.type.name.lower(),
+            "capacity": self.capacity,
+            "cost": self.cost,
+            "value": self.value,
+            "demand_destination_id": self.demand_destination_id,
+            "demand_destination_name": self.demand_destination_name,
+            "inbound_edge_ids": self.inbound_edge_ids,
+            "outbound_edge_ids": self.outbound_edge_ids,
+        }
 
     def __repr__(self) -> str:
         return f"Node(name: {self.name()}, capacity: {self.capacity}, cost: {self.cost}, value: {self.value})"
@@ -60,6 +89,22 @@ class Edge:
         self.source = source
         self.destination = destination
         self.capacity = capacity
+        self.key = (source.name(), destination.name())
+        self.type = (source.type, destination.type)
+        self.pulp_vars = {}
+
+    def as_dict(self):
+        return {
+            "key": self.key,
+            "name": self.name(),
+            "capacity": self.capacity,
+            "type": self.type,
+            "source": self.source.as_dict(),
+            "destination": self.destination.as_dict(),
+        }
+
+    def name(self):
+        return f"{self.source.name()}_to_{self.destination.name()}"
 
     def __repr__(self) -> str:
         return f"Edge({self.source.name()} -> {self.destination.name()}, capacity: {self.capacity})"
@@ -71,42 +116,31 @@ class Edge:
         return hash((self.source.name() + self.destination.name()))
 
 
-def add_edges(edges: Set[Edge], node_a: Node, node_b: Node, ref_data: Dict[str, Any]):
+def add_edges(edges: Dict[tuple, Edge], node_a: Node, node_b: Node, ref_data: Dict[str, Any]):
     """Add edges between a and b.
 
     Edge Types:
-    - Source to Demand:
-        Edge(source -> demand_plantzone, capacity: 1)
-        Edge(demand_plantzone -> source, capacity: 0)
+    - Source to Origin:
+        Edge(source -> origin, capacity: 1)
 
-    Demand to Origin:
-        Edge(demand_plantzone -> origin, capacity: 1)
-        Edge(origin -> demand_plantzone, capacity: 0)
-
-    Waypoint Origins:
+    - Waypoint Origins:
         Edge(origin -> waypoint, capacity: 1)
-        Edge(waypoint -> origin, capacity: 0)
-
         Edge(origin -> town, capacity: 1)
-        Edge(town -> origin, capacity: 0)
 
-    Waypoint Interconnects:
+    - Waypoint Interconnects:
         Edge(waypoint -> waypoint, capacity: max_capacity)
         Edge(waypoint -> town, capacity: max_capacity)
         Edge(town -> waypoint, capacity: max_capacity)
         Edge(town -> town, capacity: max_capacity)
 
-    Waypoint Exits:
+    - Waypoint Exits:
         Edge(town -> warehouse, capacity: warehouse_max_capacity)
-        Edge(warehouse -> town, capacity: 0)
 
-    Warehouse to Lodging:
-        Edge(warehouse -> lodging, capacity: equal to capacity of destination lodging_{warehouse})
-        Edge(lodging -> warehouse, capacity: 0)
+    - Town to Warehouse:
+        Edge(warehouse -> warehouse, capacity: equal to capacity of destination warehouse
 
-    Lodging to Sink:
-        Edge(lodging -> sink, cap: equal to capacity of source lodging_{warehouse})
-        Edge(sink -> lodging, capacity: 0)
+    - Warehouse to Sink:
+        Edge(warehouse -> sink, cap: equal to capacity of source warehouse
     """
     max_capacity = ref_data["max_capacity"]
 
@@ -136,8 +170,9 @@ def add_edges(edges: Set[Edge], node_a: Node, node_b: Node, ref_data: Dict[str, 
     edge_a = Edge(node_a, node_b, capacity=capacity)
     edge_b = Edge(node_b, node_a, capacity=reverse_capacity)
 
-    edges.add(edge_a)
-    edges.add(edge_b)
+    for edge in [edge_a, edge_b]:
+        if edge.key not in edges:
+            edges[edge.key] = edge
 
 
 def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any], **kwargs) -> Node:
@@ -148,6 +183,8 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     kwargs `capacity` is required for warehouse nodes.
     kwargs `capacity` and `cost` are required for lodging nodes.
     """
+
+    demand_destination_id = None
 
     match node_type:
         case NodeType.SOURCE:
@@ -160,6 +197,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             ), "Demand nodes require 'warehouse' and 'plantzone' kwargs."
             capacity = 1
             cost = 0
+            demand_destination_id = warehouse
             value = (
                 ref_data["plantzone_data"][warehouse][plantzone]["value"]
                 if warehouse and plantzone
@@ -193,22 +231,29 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             capacity = ref_data["max_capacity"]
             cost = 0
             value = 0
+        case NodeType.INVALID:
+            capacity = 0
+            cost = 0
+            value = 0
 
-    node = Node(node_id, node_type, capacity, cost, value)
-    nodes.add(node)
-    return node
+    node = Node(node_id, node_type, capacity, cost, value, demand_destination_id)
+    if node.key not in nodes:
+        nodes[node.key] = node
+        return node
+    else:
+        return nodes[node.key]
 
 
-def get_demand_node(nodes, plantzone, warehouse, ref_data):
-    """"""
-    return get_node(
-        nodes,
-        f"plantzone_{plantzone}_at_warehouse_{warehouse}",
-        NodeType.DEMAND,
-        ref_data,
-        plantzone=plantzone,
-        warehouse=warehouse,
-    )
+# def get_demand_node(nodes, plantzone, warehouse, ref_data):
+#     """"""
+#     return get_node(
+#         nodes,
+#         f"plantzone_{plantzone}_at_warehouse_{warehouse}",
+#         NodeType.DEMAND,
+#         ref_data,
+#         plantzone=plantzone,
+#         warehouse=warehouse,
+#     )
 
 
 def get_lodging_node(nodes, warehouse, capacity, cost, ref_data):
@@ -263,49 +308,57 @@ def generate_warehouse_capacities(ref_data: Dict[str, Any]):
     return warehouse_capacities
 
 
-def generate_source_to_demand_data(nodes: Set[Node], edges: Set[Edge], ref_data: Dict[str, Any]):
+def generate_source_to_demand_data(
+    nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]
+):
     """Add source node and per town demand valued plantzone nodes and edges."""
 
     source = get_node(nodes, "source", NodeType.SOURCE, ref_data)
     for warehouse in ref_data["warehouses"]:
         for plantzone in ref_data["plantzone_data"][warehouse].keys():
             destination = get_demand_node(nodes, plantzone, warehouse, ref_data)
-            add_edges(edges, source, destination, ref_data)
+            add_edges(nodes, edges, source, destination, ref_data)
+            assert edges[(source.key, destination.key)].source == nodes[source.key]
 
 
-def generate_demand_to_plantzone_data(nodes: Set[Node], edges: Set[Edge], ref_data: Dict[str, Any]):
+def generate_demand_to_plantzone_data(
+    nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]
+):
     """Add plantzone waypoint nodes and demand edges"""
-
     for warehouse in ref_data["warehouses"]:
         for plantzone in ref_data["plantzone_data"][warehouse].keys():
             source = get_demand_node(nodes, plantzone, warehouse, ref_data)
             destination = get_node(nodes, plantzone, NodeType.ORIGIN, ref_data)
-            add_edges(edges, source, destination, ref_data)
+            add_edges(nodes, edges, source, destination, ref_data)
 
 
-def generate_waypoint_data(nodes: Set[Node], edges: Set[Edge], ref_data: Dict[str, Any]):
+def generate_waypoint_data(
+    nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]
+):
     """Add waypoint nodes and edges ignore appending waypoint plantzone nodes."""
-
     for link in read_workerman_json("deck_links.json"):
         a, b = str(link[0]), str(link[1])
         node_a = get_waypoint_node(nodes, a, ref_data)
         node_b = get_waypoint_node(nodes, b, ref_data)
-        add_edges(edges, node_a, node_b, ref_data)
+        add_edges(nodes, edges, node_a, node_b, ref_data)
+        assert edges[(node_a.key, node_b.key)].source == nodes[node_a.key]
 
 
-def generate_town_to_warehouse_data(nodes: Set[Node], edges: Set[Edge], ref_data: Dict[str, Any]):
+def generate_town_to_warehouse_data(
+    nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]
+):
     """Add warehouse_{town} nodes and waypoint_{town} to warehouse_{town} edges."""
-
     for warehouse, capacity in ref_data["warehouse_max_capacity"].items():
         town = ref_data["warehouse_to_town_data"][warehouse]
         source = get_node(nodes, town, NodeType.TOWN, ref_data)
         destination = get_node(nodes, warehouse, NodeType.WAREHOUSE, ref_data, capacity=capacity)
-        add_edges(edges, source, destination, ref_data)
+        add_edges(nodes, edges, source, destination, ref_data)
 
 
-def generate_warehouse_to_lodging_data(nodes: Set[Node], edges: Set[Edge], ref_data: Dict[str, Any]):
+def generate_warehouse_to_lodging_data(
+    nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]
+):
     """Add per town lodging data."""
-
     for warehouse in ref_data["warehouses"]:
         warehouse_capacity = ref_data["warehouse_max_capacity"][warehouse]
         source = get_node(
@@ -315,70 +368,99 @@ def generate_warehouse_to_lodging_data(nodes: Set[Node], edges: Set[Edge], ref_d
         for lodging_capacity, data in ref_data["lodging_data"][warehouse].items():
             cost = data[0].get("cost")
             destination = get_lodging_node(nodes, warehouse, lodging_capacity, cost, ref_data)
-            add_edges(edges, source, destination, ref_data)
+            add_edges(nodes, edges, source, destination, ref_data)
 
 
-def generate_lodging_to_sink_data(nodes: Set[Node], edges: Set[Edge], ref_data: Dict[str, Any]):
+def generate_lodging_to_sink_data(
+    nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]
+):
     """Add sink node and per town lodging to sink edge data."""
-
     destination = get_node(nodes, "sink", NodeType.SINK, ref_data)
     for warehouse in ref_data["warehouses"]:
         for lodging_capacity, data in ref_data["lodging_data"][warehouse].items():
             cost = data[0].get("cost")
             source = get_lodging_node(nodes, warehouse, lodging_capacity, cost, ref_data)
-            add_edges(edges, source, destination, ref_data)
+            add_edges(nodes, edges, source, destination, ref_data)
 
 
-def print_sample_nodes(nodes: Set[Node]):
+def populate_node_edge_links(nodes: Dict[str, Node], edges: Dict[tuple, Edge]):
+    """Add inbound and output edge key lists to nodes."""
+    for edge_key, edge in edges.items():
+        nodes[edge.source.key].outbound_edge_ids.append(edge_key)
+        nodes[edge.destination.key].inbound_edge_ids.append(edge_key)
+
+
+def print_sample_nodes(nodes: Dict[str, Node]):
     """Print sample nodes."""
-
-    seen_node_prefixes = set()
-    for node in nodes:
-        prefix = node.name().split("_")[0]
-        if prefix in seen_node_prefixes:
+    seen_node_types = set()
+    for _, node in nodes.items():
+        if node.type in seen_node_types:
             continue
-        seen_node_prefixes.add(prefix)
+        seen_node_types.add(node.type)
+        print()
         print(node)
+        if node.type not in [NodeType.SOURCE, NodeType.SINK]:
+            print(node.as_dict())
 
 
-def print_sample_edges(edges: Set[Edge]):
+def print_sample_edges(edges: Dict[tuple, Edge]):
     """Print sample edges."""
     seen_edge_prefixes = set()
-    for edge in edges:
+    for _, edge in edges.items():
         prefix_pair = (edge.source.type.value, edge.destination.type.value)
         if prefix_pair in seen_edge_prefixes:
             continue
         seen_edge_prefixes.add(prefix_pair)
+        print()
         print(edge)
+        if edge.source.type != NodeType.SOURCE and edge.destination.type != NodeType.SINK:
+            print(edge.as_dict())
 
 
-def edges_to_json(edges: Set[Edge]):
+def edges_to_json(edges: Dict[tuple, Edge]):
     """format edges for json"""
-    data = [
-        {
-            "source": edge.source.name(),
-            "destination": edge.destination.name(),
-            "capacity": edge.capacity,
-        }
-        for edge in edges
-    ]
-    return sorted(data, key=lambda edge: (edge["source"], edge["destination"]))
+    data = [edge.as_dict() for _, edge in edges.items()]
+    return sorted(
+        data,
+        key=lambda edge: (
+            edge["source"]["type"],
+            edge["source"]["name"],
+            edge["destination"]["name"],
+        ),
+    )
 
 
-def nodes_to_json(nodes: Set[Node]):
+def nodes_to_json(nodes: Dict[str, Node]):
     """format nodes for json"""
-    data = [
-        {"id": node.name(), "capacity": node.capacity, "cost": node.cost, "value": node.value}
-        for node in nodes
-    ]
+    data = [node.as_dict() for _, node in nodes.items()]
     return sorted(data, key=lambda node: node["id"])
 
 
-def main():
+def cleanup_nodes_and_edges(nodes, edges):
+    """Remove no load/flow capacity edges and 0 value demand nodes (with associated edges)."""
+    nodes_to_remove = set()
+    for node_key, node in nodes.copy().items():
+        if node.type == NodeType.DEMAND and node.value == 0:
+            nodes_to_remove.add(node_key)
+
+    for edge_key, edge in edges.copy().items():
+        if (
+            edge.capacity == 0
+            or edge.source.key in nodes_to_remove
+            or edge.destination.key in nodes_to_remove
+        ):
+            del edges[edge_key]
+
+    for node_key in nodes_to_remove:
+        del nodes[node_key]
+
+
+def generate_empire_data():
+    """Generate and return a Dict of Node and Edge objects composing the empire data."""
     ref_data = get_reference_data()
 
-    edges = set()
-    nodes = set()
+    edges: Dict[tuple, Edge] = {}
+    nodes: Dict[str, Node] = {}
 
     generate_source_to_demand_data(nodes, edges, ref_data)
     generate_demand_to_plantzone_data(nodes, edges, ref_data)
@@ -387,18 +469,33 @@ def main():
     generate_warehouse_to_lodging_data(nodes, edges, ref_data)
     generate_lodging_to_sink_data(nodes, edges, ref_data)
 
-    print_sample_nodes(nodes)
-    print_sample_edges(edges)
-    print(f"Num edges: {len(edges)}, Num nodes: {len(nodes)}")
+    cleanup_nodes_and_edges(nodes, edges)
+    populate_node_edge_links(nodes, edges)
+
+    edges_dict = dict(sorted(edges.items()))
+    nodes_dict = dict(sorted(nodes.items()))
 
     data = {
-        "edges": edges_to_json(edges),
-        "nodes": nodes_to_json(nodes),
-        "warehouses": list(ref_data["warehouses"]),
-        "plantzones": list(ref_data["plantzones"]),
+        "nodes": nodes_dict,
+        "edges": edges_dict,
     }
-    filepath = write_user_json("full_empire.json", data)
-    print(f"Empire data written to {filepath}")
+
+    return data
+
+
+def main():
+    data = generate_empire_data()
+    print_sample_nodes(data["nodes"])
+    print_sample_edges(data["edges"])
+    print(f"Num edges: {len(data["edges"])}, Num nodes: {len(data["nodes"])}")
+
+    # data = {
+    #     "edges": edges_to_json(data["edges"]),
+    #     "nodes": nodes_to_json(data["nodes"]),
+    # }
+
+    # filepath = write_user_json("full_empire.json", data)
+    # print(f"Empire data written to {filepath}")
 
 
 if __name__ == "__main__":
