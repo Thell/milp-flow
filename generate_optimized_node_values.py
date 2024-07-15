@@ -290,6 +290,8 @@ def generate_sample_data():
 def generate_full_data():
     output = {}
     for town in DISTANCES_TK2PZK.keys():
+        if town in ["1375"]:
+            continue
         if str(town) not in output:
             output[str(town)] = {}
 
