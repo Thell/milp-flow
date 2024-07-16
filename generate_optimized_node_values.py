@@ -292,8 +292,8 @@ def generate_full_data():
     for town in DISTANCES_TK2PZK.keys():
         if town in ["1375"]:
             continue
-        if str(town) not in output:
-            output[str(town)] = {}
+        # if str(town) not in output:
+        #     output[str(town)] = {}
 
         median_giant = medianGiant(town)
         median_goblin = medianGoblin(town)
@@ -313,10 +313,18 @@ def generate_full_data():
             }
             optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
 
-            output[str(town)][str(plantzone)] = {}
-            output[str(town)][str(plantzone)]["worker"] = optimized_worker[0]
-            output[str(town)][str(plantzone)]["skills"] = optimized_worker[1]["skills"]
-            output[str(town)][str(plantzone)]["value"] = optimized_worker[1]["profit"]
+            if str(plantzone) not in output:
+                output[str(plantzone)] = {}
+            output[str(plantzone)][str(town)] = {}
+            output[str(plantzone)][str(town)]["worker"] = optimized_worker[0]
+            output[str(plantzone)][str(town)]["skills"] = optimized_worker[1]["skills"]
+            output[str(plantzone)][str(town)]["value"] = optimized_worker[1]["profit"]
+
+    for plantzone, warehouse_data in output.copy().items():
+        output[plantzone] = dict(
+            sorted(warehouse_data.items(), key=lambda x: x[1]["value"], reverse=True)
+        )
+
     return output
 
 
@@ -326,7 +334,7 @@ def main():
     print(f"Wrote sample node values to {filepath}.")
 
     data = generate_full_data()
-    write_user_json("node_values_per_town.json", data)
+    filepath = write_user_json("node_values_per_town.json", data)
     print(f"Wrote full node values to {filepath}.")
 
 
