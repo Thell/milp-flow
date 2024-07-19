@@ -145,21 +145,45 @@ def print_solver_output(prob, data, edge_vars, doFull=False):
 #     # print(f"Transit nodes ({len(transit_nodes)}):\n{transit_nodes}")
 
 
-def print_empire_solver_output(prob, ref_data, max_cost, detailed=False):
+def print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=False):
     solution_vars = {}
     if detailed:
         print("\nDetailed Solution:")
 
     for v in prob.variables():
         if v.varValue is not None and v.varValue > 0:
-            if detailed:
-                print(v.name, "=", v.varValue)
-            solution_vars[v.name] = v.varValue
-
-    print("Total Value:", solution_vars["demand_value"])
-    print(f"Total Cost (max: {max_cost}):", solution_vars["cost"])
-    print("$/CP:", solution_vars["demand_value"] / solution_vars["cost"])
+            solution_vars[v.name] = {
+                "value": v.varValue,
+                "lowBound": v.lowBound,
+                "upBound": v.upBound,
+            }
+    cost = 0
+    for k, v in solution_vars.items():
+        if k.startswith("Load_"):
+            kname = k.replace("Load_", "")
+            if "_to_" in k:
+                # An edge
+                source, destination = kname.split("_to_")
+                edge_key = (source, destination)
+                edge = graph_data["edges"].get(edge_key, None)
+                print(edge, v)
+            else:
+                # A node
+                node = graph_data["nodes"].get(kname, None)
+                print(node, v)
+                cost = cost + node.cost
+    print()
+    print("Load_source:", solution_vars["Load_source"]["value"])
+    print("Load_sink:", solution_vars["Load_sink"]["value"])
+    print()
+    print("Calculated cost:", cost)
+    print()
+    print("Reported Total Value:", round(solution_vars["value"]["value"]))
+    print(f"Reported Total Cost (max: {max_cost}):", solution_vars["cost"]["value"])
+    if solution_vars["cost"]["value"]:
+        print("$/CP:", round(solution_vars["value"]["value"] / solution_vars["cost"]["value"]))
+    print()
 
     data = {"max_cost": max_cost, "solution_vars": solution_vars}
-    filepath = write_user_json(f"empire_solution_{int(solution_vars["cost"])}.json", data)
+    filepath = write_user_json(f"empire_solution_{int(solution_vars["cost"]["value"])}.json", data)
     print("Solution vars saved to:", filepath)
