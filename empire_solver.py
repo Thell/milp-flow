@@ -3,273 +3,343 @@
 
 Goal: Maximize demand value - cost
 
-* The model is based on flow conservation where the source outbound load == sink inbound load.
+The model is based on flow where source outbound load == sink inbound load per demand destination.
 
-* All nodes except source have the same "base" inbound constraints.
-* All nodes except sink have the same "base" outbound constraints.
-
-* All edges share the same "base" inbound and outbound constraints.
-* All edges have a reverse edge.
-
+* All edges and nodes have a load which is calculated per demand warehouse.
 * All edges and nodes have a capacity which the calculated load must not exceed.
-
-ref_data dict structure is:
-{
-  "nodes": [{"id": str, "capacity": int, "cost": int, "value": float},...],
-  "edges": [{"source": str, "destination": str, "capacity": int}, ...],
-  "warehouses": [str, ...],
-  "plantzones": [str, ...]
-}
-
-where:
-  - all numeric values are >= 0
-  - all node "id" values except "source" and "sink" are prefixed with
-    demand_, origin_, waypoint_, town_, warehouse_ or lodging_
-  - edge "source" and "destination" are node "id"s.
-  - warehouses and plantzones are str id numbers for the respective nodes.
-
-Solver edge_var names should signify "{source}_to_{destination}"
 """
 
-import hashlib
-import json
-from typing import Dict, Any
+from typing import Dict, TypedDict
 
 import pulp
 
-from file_utils import read_empire_json
 from print_utils import print_empire_solver_output
+from generate_empire_data import NodeType, Node, Edge, generate_empire_data, get_reference_data
 
 M = 1e6
 
 
-def create_load_vars(ref_data: Dict[str, Any]):
-    """Integer variables to represent the dynamic load for each node and edge."""
-    load_vars = {}
-    for node in ref_data["nodes"]:
-        key = node["id"]
-        load_vars[key] = pulp.LpVariable(f"load_{key}", lowBound=0, cat="Integer")
-
-    for edge in ref_data["edges"]:
-        key = f"{edge['source']}_to_{edge['destination']}"
-        load_vars[key] = pulp.LpVariable(f"load_{key}", lowBound=0, cat="Integer")
-
-    return load_vars
+class GraphData(TypedDict):
+    nodes: Dict[str, Node]
+    edges: Dict[str, Edge]
+    warehouse_nodes: Dict[str, Node]
 
 
-def create_has_load_vars(ref_data: Dict[str, Any], load_vars):
-    """Binary variables to represent the load condition for each node and edge."""
-    has_load_vars = {}
-    for node in ref_data["nodes"]:
-        key = node["id"]
-        has_load_vars[key] = pulp.LpVariable(f"has_load_{key}", cat=pulp.LpBinary)
+def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
+    """has_load and load vars for nodes.
+    `has_load`: binary indicator of a load.
+    `load_for_{warehouse}`: integer value of a destination bound load.
+    """
+    for node in graph_data["nodes"].values():
+        match node.type:
+            case NodeType.demand:
+                # Demand nodes only have their own load.
+                node.pulp_vars[f"LoadForWarehouse_{node.demand_destination_id}"] = pulp.LpVariable(
+                    f"LoadForWarehouse_{node.demand_destination_id}_at_{node.name()}",
+                    lowBound=0,
+                    upBound=node.capacity,
+                    cat="Integer",
+                )
+            case NodeType.origin:
+                # Origins only have loads for the 'top_n' demand destinations.
+                for source, _ in node.inbound_edge_ids:
+                    demand_destination_id = graph_data["nodes"][source].demand_destination_id
+                    node.pulp_vars[f"LoadForWarehouse_{demand_destination_id}"] = pulp.LpVariable(
+                        f"LoadForWarehouse_{demand_destination_id}_at_{node.name()}",
+                        lowBound=0,
+                        upBound=node.capacity,
+                        cat="Integer",
+                    )
+            case NodeType.warehouse:
+                # Warehouses should only have their own loads.
+                node.pulp_vars[f"LoadForWarehouse_{node.id}"] = pulp.LpVariable(
+                    f"LoadForWarehouse_{node.id}_at_{node.name()}",
+                    lowBound=0,
+                    upBound=node.capacity,
+                    cat="Integer",
+                )
+            case NodeType.lodging:
+                # Lodgings should only have their own loads.
+                node.pulp_vars[f"LoadForWarehouse_{node.name()}"] = pulp.LpVariable(
+                    f"LoadForWarehouse_{node.id}_at_{node.name()}",
+                    lowBound=0,
+                    upBound=node.capacity,
+                    cat="Integer",
+                )
+            case NodeType.source | NodeType.waypoint | NodeType.town | NodeType.sink:
+                # Source, Waypoint and Sink nodes have a LoadForWarehouse var for each warehouse.
+                for warehouse in graph_data["warehouse_nodes"].values():
+                    node.pulp_vars[f"LoadForWarehouse_{warehouse.id}"] = pulp.LpVariable(
+                        f"LoadForWarehouse_{warehouse.id}_at_{node.name()}",
+                        lowBound=0,
+                        upBound=warehouse.capacity,
+                        cat="Integer",
+                    )
+            case NodeType.INVALID:
+                assert node.type is not NodeType.INVALID, "INVALID node type."
+                return  # Unreachable: Stops pyright unbound error reporting.
 
-    for edge in ref_data["edges"]:
-        key = f"{edge['source']}_to_{edge['destination']}"
-        has_load_vars[key] = pulp.LpVariable(f"has_load_{key}", cat=pulp.LpBinary)
-
-    return has_load_vars
-
-
-def create_warehouse_demand_vars(ref_data: Dict[str, Any], load_vars):
-    """Sum variable of demand load at each warehouse."""
-    warehouse_demand_vars = {}
-    for warehouse in ref_data["warehouses"]:
-        plantzones_for_warehouse = []
-        for plantzone in ref_data["plantzones"]:
-            plantzones_for_warehouse.append(f"demand_plantzone_{plantzone}_at_warehouse_{warehouse}")
-
-        warehouse_demand_vars[warehouse] = pulp.lpSum(
-            load_vars[plantzone_node] for plantzone_node in plantzones_for_warehouse
+        # The load is simply the sum of the warehouse loads at the node.
+        load_var = pulp.LpVariable(
+            f"Load_{node.name()}", lowBound=0, upBound=node.capacity, cat="Integer"
         )
+        prob += (
+            load_var
+            == pulp.lpSum(
+                var for key, var in node.pulp_vars.items() if key.startswith("LoadForWarehouse")
+            ),
+            f"TotalLoad_{node.name()}",
+        )
+        node.pulp_vars["Load"] = load_var
 
-    return warehouse_demand_vars
+        # Load activates has_load and if activated there must be a load.
+        has_load_var = pulp.LpVariable(f"HasLoad_{node.name()}", cat="Binary")
+        prob += load_var <= has_load_var * M, f"LoadActivation_{node.name()}"
+        prob += has_load_var <= load_var, f"LinkLoadHasLoad_{node.name()}"
+        node.pulp_vars["HasLoad"] = has_load_var
 
 
-def create_demand_value_var(prob, ref_data: Dict[str, Any], has_load_vars):
+def create_edge_vars(prob: pulp.LpProblem, graph_data: GraphData):
+    """has_load and load vars for edges.
+    `has_load` is a binary indicator of a load.
+    `load_for_{warehouse}` is an integer value of a destination warehouse bound load.
+    """
+
+    for edge in graph_data["edges"].values():
+        match edge.type:
+            case (NodeType.source, NodeType.demand):
+                edge.pulp_vars[f"LoadForWarehouse_{edge.destination.demand_destination_id}"] = (
+                    pulp.LpVariable(
+                        f"LoadForWarehouse_{edge.destination.demand_destination_id}_on_{edge.name()}",
+                        lowBound=0,
+                        upBound=edge.capacity,
+                        cat="Integer",
+                    )
+                )
+            case (NodeType.demand, NodeType.origin):
+                edge.pulp_vars[f"LoadForWarehouse_{edge.source.demand_destination_id}"] = (
+                    pulp.LpVariable(
+                        f"LoadForWarehouse_{edge.source.demand_destination_id}_on_{edge.name()}",
+                        lowBound=0,
+                        upBound=edge.capacity,
+                        cat="Integer",
+                    )
+                )
+            case (NodeType.warehouse, NodeType.lodging):
+                # There is one edge for each lodging capacity for the warehouse.
+                edge.pulp_vars[f"LoadForWarehouse_{edge.source.id}"] = pulp.LpVariable(
+                    f"LoadForWarehouse_{edge.source.id}_on_{edge.name()}",
+                    lowBound=0,
+                    upBound=edge.capacity,
+                    cat="Integer",
+                )
+            case (NodeType.lodging, NodeType.sink):
+                edge.pulp_vars[f"LoadForWarehouse_{edge.source.demand_destination_id}"] = (
+                    pulp.LpVariable(
+                        f"LoadForWarehouse_{edge.source.demand_destination_id}_on_{edge.name()}",
+                        lowBound=0,
+                        upBound=edge.capacity,
+                        cat="Integer",
+                    )
+                )
+            case _:
+                for warehouse in graph_data["warehouse_nodes"].values():
+                    edge.pulp_vars[f"LoadForWarehouse_{warehouse.id}"] = pulp.LpVariable(
+                        f"LoadForWarehouse_{warehouse.id}_on_{edge.name()}",
+                        lowBound=0,
+                        upBound=warehouse.capacity,
+                        cat="Integer",
+                    )
+
+        # Load is the sum of all LoadForWarehouse vars on the edge.
+        load_var = pulp.LpVariable(
+            f"Load_{edge.name()}", lowBound=0, upBound=edge.capacity, cat="Integer"
+        )
+        prob += (
+            load_var
+            == pulp.lpSum(
+                var for key, var in edge.pulp_vars.items() if key.startswith("LoadForWarehouse")
+            ),
+            f"TotalLoad_{edge.name()}",
+        )
+        edge.pulp_vars["Load"] = load_var
+
+        # Load activates has_load and if activated there must be a load.
+        has_load_var = pulp.LpVariable(f"HasLoad_{edge.name()}", cat="Binary")
+        prob += load_var <= has_load_var * M, f"LoadActivation_{edge.name()}"
+        prob += has_load_var <= load_var, f"LinkLoadHasLoad_{edge.name()}"
+        edge.pulp_vars["HasLoad"] = has_load_var
+
+
+def link_node_and_edge_vars(prob: pulp.LpProblem, graph_data: GraphData):
+    """Ensure load per warehouse flow conservation for all nodes.
+    Link the inbound edges load sum to the node load to the outbound edges load sum.
+    Special handling for source and sink nodes.
+    """
+    for node in graph_data["nodes"].values():
+        if node.type is NodeType.source:
+            # Source load is linked to the outgoing edges summed by demand destination.
+            # Since each demand node has a cap of 1 just sum the HasLoad of each edge per warehouse.
+            outbound_edges = [graph_data["edges"][edge] for edge in node.outbound_edge_ids]
+            for warehouse in graph_data["warehouse_nodes"].values():
+                prob += (
+                    node.pulp_vars[f"LoadForWarehouse_{warehouse.id}"]
+                    == pulp.lpSum(
+                        edge.pulp_vars["HasLoad"]
+                        for edge in outbound_edges
+                        if edge.destination.demand_destination_id == warehouse.id
+                    ),
+                    f"LinkSourceDemandLoadForWarhouse_{warehouse.id}_at_{node.name()}",
+                )
+            continue
+
+        # Ensure the each node's LoadForWarehouse equals the sum of the related inbound vars.
+        in_edges = [graph_data["edges"][edge] for edge in node.inbound_edge_ids]
+        for node_var_key, node_var in node.pulp_vars.items():
+            if not node_var_key.startswith("LoadForWarehouse_"):
+                continue
+            prob += (
+                node_var
+                == pulp.lpSum(
+                    var
+                    for edge in in_edges
+                    for var_key, var in edge.pulp_vars.items()
+                    if var_key == node_var_key
+                    or (node.type is NodeType.lodging and var_key.startswith("LoadForWarehouse_"))
+                ),
+                f"LinkInboundLoadForWarehouse_{node_var_key}_at_{node.name()}",
+            )
+
+        # Outbound is not needed for the sink.
+        if node.type is NodeType.sink:
+            continue
+
+        # Ensure the each node's LoadForWarehouse equals the sum of the related outbound vars.
+        out_edges = [graph_data["edges"][edge] for edge in node.outbound_edge_ids]
+        for node_var_key, node_var in node.pulp_vars.items():
+            if not node_var_key.startswith("LoadForWarehouse_"):
+                continue
+            prob += (
+                node_var
+                == pulp.lpSum(
+                    var
+                    for edge in out_edges
+                    for var_key, var in edge.pulp_vars.items()
+                    if var_key == node_var_key
+                    or (node.type is NodeType.lodging and var_key.startswith("LoadForWarehouse_"))
+                ),
+                f"LinkOutboundLoadForWarehouse_{node_var_key}_at_{node.name()}",
+            )
+
+
+def create_value_var(prob: pulp.LpProblem, graph_data: GraphData):
     """Sum variable of value at demand nodes with load."""
-    demand_value_var = pulp.LpVariable("demand_value", lowBound=0)
-
+    value_var = pulp.LpVariable("value", lowBound=0)
     prob += (
-        demand_value_var
+        value_var
         == pulp.lpSum(
-            node["value"] * has_load_vars[node["id"]]
-            for node in ref_data["nodes"]
-            if node["id"].startswith("demand") and node["value"] > 0
+            node.value * node.pulp_vars["HasLoad"]
+            for node in graph_data["nodes"].values()
+            if node.type is NodeType.demand
         ),
-        "Total_demand_value_constraint",
+        "TotalValue",
     )
+    return value_var
 
-    return demand_value_var
 
-
-def create_cost_var(prob, ref_data: Dict[str, Any], has_load_vars):
+def create_cost_var(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int):
     """Sum variable of cost at nodes with load."""
-    cost_var = pulp.LpVariable("cost", lowBound=0)  # Create a PuLP variable
-
+    cost_var = pulp.LpVariable("cost", lowBound=0, upBound=max_cost)
     prob += (
         cost_var
         == pulp.lpSum(
-            node["cost"] * has_load_vars[node["id"]]
-            for node in ref_data["nodes"]
-            if node["cost"] > 0
+            node.cost * node.pulp_vars["HasLoad"]
+            for node in graph_data["nodes"].values()
+            if node.type is not NodeType.source and node.type is not NodeType.sink
         ),
-        "Total_cost_constraint",
+        "TotalCost",
     )
-
     return cost_var
 
 
-def add_objective_function(prob, demand_value_var, cost_var):
-    """Maximize demand value and minimize cost."""
-    prob += demand_value_var - cost_var, "ObjectiveFunction"
-
-
-def add_cost_constraint(prob, cost_var, max_cost):
-    """Ensure total cost <= max_cost."""
-    prob += cost_var <= max_cost, "Max_cost_constraint"
-
-
-def add_demand_warehouse_balance_constraints(prob, ref_data, warehouse_demand_vars, load_vars):
-    """Ensure demand is equal to load for each warehouse."""
-    for warehouse_id in ref_data["warehouses"]:
-        warehouse = f"warehouse_{warehouse_id}"
+def add_warehouse_load_balance_constraints(prob: pulp.LpProblem, graph_data: GraphData):
+    """Ensure each warehouse receives its total origin demand."""
+    for warehouse in graph_data["warehouse_nodes"].values():
         prob += (
-            warehouse_demand_vars[warehouse_id] == load_vars[warehouse],
-            f"Demand_load_balance_{warehouse}",
+            warehouse.pulp_vars["Load"]
+            == graph_data["nodes"]["source"].pulp_vars[f"LoadForWarehouse_{warehouse.id}"],
+            f"BalanceDemandLoadForWarehouse_{warehouse.id}",
         )
 
 
-def add_base_constraints(prob, ref_data, load_var, has_load_var):
-    """Add load, capacity and activation constraints to nodes and edges."""
-
-    def constrain(prob, key, capacity):
-        # Ensure load does not exceed capacity.
-        prob += load_var[key] <= capacity, f"Capacity_{key}"
-        # Ensure load activates has_load.
-        prob += load_var[key] <= has_load_var[key] * M, f"Load_activation_{key}"
-        # Ensure if activated, it must have a load.
-        prob += has_load_var[key] <= load_var[key], f"Load_has_load_link_{key}"
-
-    # Constrain all nodes.
-    for node in ref_data["nodes"]:
-        key = node["id"]
-        capacity = node["capacity"]
-        constrain(prob, key, capacity)
-
-    # Constrain all edges.
-    for edge in ref_data["edges"]:
-        key = f"{edge['source']}_to_{edge['destination']}"
-        capacity = edge["capacity"]
-        constrain(prob, key, capacity)
-
-
-def add_flow_constraints(prob, ref_data, load_vars):
-    """Ensure flow conservation for all nodes except source and sink.
-    Link the inbound edges load sum to the node load to the outbound edges load sum.
-    """
-    for node in ref_data["nodes"]:
-        node_key = node["id"]
-        if node_key not in ["source", "sink"]:
-            in_edge_keys = [
-                f"{edge['source']}_to_{edge['destination']}"
-                for edge in ref_data["edges"]
-                if edge["destination"] == node_key
-            ]
-            out_edge_keys = [
-                f"{edge['source']}_to_{edge['destination']}"
-                for edge in ref_data["edges"]
-                if edge["source"] == node_key
-            ]
-
-            # Ensure the node load is equal to the sum of the inbound edge loads
-            prob += (
-                load_vars[node_key] == pulp.lpSum(load_vars[edge_key] for edge_key in in_edge_keys),
-                f"Inbound_flow_to_load_{node_key}",
+def add_warehouse_outbound_count_constraint(prob: pulp.LpProblem, graph_data: GraphData):
+    """Ensure a single warehouse -> lodging -> sink path for each warehouse."""
+    for warehouse in graph_data["warehouse_nodes"].values():
+        prob += (
+            pulp.lpSum(
+                graph_data["edges"][edge_key].pulp_vars["HasLoad"]
+                for edge_key in warehouse.outbound_edge_ids
             )
-
-            # Ensure the node load is equal to the sum of the outbound edge loads
-            prob += (
-                load_vars[node_key] == pulp.lpSum(load_vars[edge_key] for edge_key in out_edge_keys),
-                f"Outbound_flow_from_load_{node_key}",
-            )
+            <= 1
+        )
 
 
-def add_source_to_sink_constraint(prob, ref_data, load_vars):
+def add_source_to_sink_constraint(prob: pulp.LpProblem, graph_data: GraphData):
     """Ensure source outbound load equals sink inbound load."""
-    source_outbound_edges = [edge for edge in ref_data["edges"] if edge["source"] == "source"]
-    sink_inbound_edges = [edge for edge in ref_data["edges"] if edge["destination"] == "sink"]
-
+    # If all warehouses are balanced with demand then I don't think this should be required.
     prob += (
         pulp.lpSum(
-            load_vars[f"{edge['source']}_to_{edge['destination']}"] for edge in source_outbound_edges
-        )
-        == pulp.lpSum(
-            load_vars[f"{edge['source']}_to_{edge['destination']}"] for edge in sink_inbound_edges
+            graph_data["nodes"]["source"].pulp_vars["Load"]
+            == graph_data["nodes"]["sink"].pulp_vars["Load"]
         ),
-        "Source_to_sink_flow_balance",
+        "BalanceSourceSink",
     )
 
 
-def create_problem(ref_data, max_cost):
+def create_problem(graph_data, max_cost):
     """Create the problem and add the varaibles and constraints."""
     prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
 
-    load_vars = create_load_vars(ref_data)
-    has_load_vars = create_has_load_vars(ref_data, load_vars)
-    warehouse_demand_vars = create_warehouse_demand_vars(ref_data, has_load_vars)
-    total_demand_value_var = create_demand_value_var(prob, ref_data, has_load_vars)
-    total_cost_var = create_cost_var(prob, ref_data, has_load_vars)
+    create_node_vars(prob, graph_data)
+    create_edge_vars(prob, graph_data)
+    link_node_and_edge_vars(prob, graph_data)
 
-    add_objective_function(prob, total_demand_value_var, total_cost_var)
+    total_value_var = create_value_var(prob, graph_data)
+    total_cost_var = create_cost_var(prob, graph_data, max_cost)
+    prob += total_value_var - total_cost_var, "ObjectiveFunction"
+    prob += total_cost_var <= max_cost, "MaxCost"
 
-    add_cost_constraint(prob, total_cost_var, max_cost)
-    add_demand_warehouse_balance_constraints(prob, ref_data, warehouse_demand_vars, load_vars)
-    add_base_constraints(prob, ref_data, load_vars, has_load_vars)
-    add_flow_constraints(prob, ref_data, load_vars)
-    add_source_to_sink_constraint(prob, ref_data, load_vars)
+    add_warehouse_outbound_count_constraint(prob, graph_data)
+    add_warehouse_load_balance_constraints(prob, graph_data)
 
+    nullLoadTypes = set()
+    for obj in graph_data["nodes"].values():
+        count = len([v for v in obj.pulp_vars.keys() if v.startswith("LoadForWarehouse")])
+        nullLoadTypes.add((obj.type, count))
+    print(nullLoadTypes)
+
+    # Enabling this conflicts with some other constraint resulting in a zero value solution.
+    # add_source_to_sink_constraint(prob, graph_data)
+
+    prob.writeLP("test.lp")
     return prob
 
 
-def compute_data_hash(ref_data):
-    """Get the hash for the full ref data dict."""
-    ref_data_str = json.dumps(ref_data, sort_keys=True)
-    hash_object = hashlib.sha256(ref_data_str.encode())
-    return hash_object.hexdigest()
+def main(max_cost=15, top_n=0):
+    graph_data = generate_empire_data(top_n)
+    prob = create_problem(graph_data, max_cost)
 
+    solver = pulp.HiGHS_CMD(
+        path="/home/thell/.local/bin/highs",
+        keepFiles=True,
+        threads=16,
+        logPath="/home/thell/milp-flow/highs_log_{max_cost}.txt",
+        options=["parallel=on", "threads=16"],
+    )
+    solver.solve(prob)
 
-def save_hash_to_file(hash_value, filename="ref_data_hash.txt"):
-    with open(filename, "w") as f:
-        f.write(hash_value)
-
-
-def load_hash_from_file(filename="ref_data_hash.txt"):
-    try:
-        with open(filename, "r") as f:
-            return f.read().strip()
-    except:  # noqa: E722
-        return 0
-
-
-def main(max_cost=40):
-    ref_data = read_empire_json("full_empire.json")
-    current_data_hash = compute_data_hash(ref_data)
-    stored_data_hash = load_hash_from_file()
-
-    # Modify cost constraint when re-using existing ref_data.
-    if current_data_hash == stored_data_hash:
-        prob_vars, prob = pulp.LpProblem.from_json("MaximizeEmpireValue.json")
-        cost_var = prob_vars["cost"]
-        prob.constraints["Max_cost_constraint"] = cost_var <= max_cost
-    else:
-        prob = create_problem(ref_data, max_cost)
-        prob.to_json("MaximizeEmpireValue.json")
-        new_data_hash = compute_data_hash(ref_data)
-        save_hash_to_file(new_data_hash)
-
-    prob.solve()
-    print_empire_solver_output(prob, ref_data, max_cost)
+    ref_data = get_reference_data(top_n)
+    print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=True)
 
 
 if __name__ == "__main__":
