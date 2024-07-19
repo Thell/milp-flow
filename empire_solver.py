@@ -9,7 +9,7 @@ The model is based on flow where source outbound load == sink inbound load per d
 * All edges and nodes have a capacity which the calculated load must not exceed.
 """
 
-from typing import Dict, TypedDict
+from typing import Dict, TypedDict, List
 
 import pulp
 
@@ -34,33 +34,40 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
         match node.type:
             case NodeType.demand:
                 # Demand nodes only have their own load.
-                node.pulp_vars[f"LoadForWarehouse_{node.demand_destination_id}"] = pulp.LpVariable(
-                    f"LoadForWarehouse_{node.demand_destination_id}_at_{node.name()}",
-                    lowBound=0,
-                    upBound=node.capacity,
-                    cat="Integer",
-                )
-            case NodeType.origin:
-                # Origins only have loads for the 'top_n' demand destinations.
-                for source, _ in node.inbound_edge_ids:
-                    demand_destination_id = graph_data["nodes"][source].demand_destination_id
-                    node.pulp_vars[f"LoadForWarehouse_{demand_destination_id}"] = pulp.LpVariable(
-                        f"LoadForWarehouse_{demand_destination_id}_at_{node.name()}",
+
+                # MARK NODE DEMAND
+                # assert node.LoadForWarehouse
+                for LoadForWarehouse in node.LoadForWarehouse:
+                    node.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
+                        # MARK NODE DEMAND
+                        f"LoadForWarehouse_{LoadForWarehouse.id}_at_{node.name()}",
                         lowBound=0,
                         upBound=node.capacity,
                         cat="Integer",
                     )
+            case NodeType.origin:
+                # Origins only have loads for the 'top_n' demand destinations.
+                for edge in node.inbound_edges:
+                    for LoadForWarehouse in edge.source.LoadForWarehouse:
+                        node.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
+                            f"LoadForWarehouse_{LoadForWarehouse.id}_at_{node.name()}",
+                            lowBound=0,
+                            upBound=node.capacity,
+                            cat="Integer",
+                        )
             case NodeType.warehouse:
                 # Warehouses should only have their own loads.
-                node.pulp_vars[f"LoadForWarehouse_{node.id}"] = pulp.LpVariable(
-                    f"LoadForWarehouse_{node.id}_at_{node.name()}",
-                    lowBound=0,
-                    upBound=node.capacity,
-                    cat="Integer",
-                )
+                # MARK Warehouse self id.
+                for LoadForWarehouse in node.LoadForWarehouse:
+                    node.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
+                        f"LoadForWarehouse_{LoadForWarehouse.id}_at_{node.name()}",
+                        lowBound=0,
+                        upBound=node.capacity,
+                        cat="Integer",
+                    )
             case NodeType.lodging:
                 # Lodgings should only have their own loads.
-                node.pulp_vars[f"LoadForWarehouse_{node.name()}"] = pulp.LpVariable(
+                node.pulp_vars[f"LoadForWarehouse_{node.id}"] = pulp.LpVariable(
                     f"LoadForWarehouse_{node.id}_at_{node.name()}",
                     lowBound=0,
                     upBound=node.capacity,
@@ -108,23 +115,25 @@ def create_edge_vars(prob: pulp.LpProblem, graph_data: GraphData):
     for edge in graph_data["edges"].values():
         match edge.type:
             case (NodeType.source, NodeType.demand):
-                edge.pulp_vars[f"LoadForWarehouse_{edge.destination.demand_destination_id}"] = (
-                    pulp.LpVariable(
-                        f"LoadForWarehouse_{edge.destination.demand_destination_id}_on_{edge.name()}",
+                # MARK DEST DEMAND
+                for LoadForWarehouse in edge.destination.LoadForWarehouse:
+                    edge.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
+                        # MARK DEST DEMAND
+                        f"LoadForWarehouse_{LoadForWarehouse.id}_on_{edge.name()}",
                         lowBound=0,
                         upBound=edge.capacity,
                         cat="Integer",
                     )
-                )
             case (NodeType.demand, NodeType.origin):
-                edge.pulp_vars[f"LoadForWarehouse_{edge.source.demand_destination_id}"] = (
-                    pulp.LpVariable(
-                        f"LoadForWarehouse_{edge.source.demand_destination_id}_on_{edge.name()}",
+                # MARK SOURCE DEMAND
+                for LoadForWarehouse in edge.source.LoadForWarehouse:
+                    edge.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
+                        # MARK DEST DEMAND
+                        f"LoadForWarehouse_{LoadForWarehouse.id}_on_{edge.name()}",
                         lowBound=0,
                         upBound=edge.capacity,
                         cat="Integer",
                     )
-                )
             case (NodeType.warehouse, NodeType.lodging):
                 # There is one edge for each lodging capacity for the warehouse.
                 edge.pulp_vars[f"LoadForWarehouse_{edge.source.id}"] = pulp.LpVariable(
@@ -134,14 +143,15 @@ def create_edge_vars(prob: pulp.LpProblem, graph_data: GraphData):
                     cat="Integer",
                 )
             case (NodeType.lodging, NodeType.sink):
-                edge.pulp_vars[f"LoadForWarehouse_{edge.source.demand_destination_id}"] = (
-                    pulp.LpVariable(
-                        f"LoadForWarehouse_{edge.source.demand_destination_id}_on_{edge.name()}",
+                # MARK SOURCE DEMAND
+                for LoadForWarehouse in edge.source.LoadForWarehouse:
+                    edge.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
+                        # MARK DEST DEMAND
+                        f"LoadForWarehouse_{LoadForWarehouse.id}_on_{edge.name()}",
                         lowBound=0,
                         upBound=edge.capacity,
                         cat="Integer",
                     )
-                )
             case _:
                 for warehouse in graph_data["warehouse_nodes"].values():
                     edge.pulp_vars[f"LoadForWarehouse_{warehouse.id}"] = pulp.LpVariable(
@@ -176,60 +186,31 @@ def link_node_and_edge_vars(prob: pulp.LpProblem, graph_data: GraphData):
     Link the inbound edges load sum to the node load to the outbound edges load sum.
     Special handling for source and sink nodes.
     """
+
+    def get_edge_vars(node: Node, node_var_key: str, edges: List[Edge]) -> List[pulp.LpVariable]:
+        """Get the relevant edge variables for a given node and key."""
+        is_source = node.type == NodeType.source
+        edge_vars = []
+        for edge in edges:
+            for key, var in edge.pulp_vars.items():
+                if key.startswith("LoadForWarehouse_") and (
+                    key == node_var_key or node.type is NodeType.lodging
+                ):
+                    edge_vars.append(edge.pulp_vars["HasLoad"] if is_source else var)
+        return edge_vars
+
+    def link_node_to_edges(prob: pulp.LpProblem, node: Node, direction: str, edges: List[Edge]):
+        """Link a node's load variable to the sum of its edge variables."""
+        for key, var in node.pulp_vars.items():
+            if key.startswith("LoadForWarehouse_"):
+                edge_vars = get_edge_vars(node, key, edges)
+                prob += var == pulp.lpSum(edge_vars), f"Link{direction}_{key}_at_{node.name()}"
+
     for node in graph_data["nodes"].values():
-        if node.type is NodeType.source:
-            # Source load is linked to the outgoing edges summed by demand destination.
-            # Since each demand node has a cap of 1 just sum the HasLoad of each edge per warehouse.
-            outbound_edges = [graph_data["edges"][edge] for edge in node.outbound_edge_ids]
-            for warehouse in graph_data["warehouse_nodes"].values():
-                prob += (
-                    node.pulp_vars[f"LoadForWarehouse_{warehouse.id}"]
-                    == pulp.lpSum(
-                        edge.pulp_vars["HasLoad"]
-                        for edge in outbound_edges
-                        if edge.destination.demand_destination_id == warehouse.id
-                    ),
-                    f"LinkSourceDemandLoadForWarhouse_{warehouse.id}_at_{node.name()}",
-                )
-            continue
-
-        # Ensure the each node's LoadForWarehouse equals the sum of the related inbound vars.
-        in_edges = [graph_data["edges"][edge] for edge in node.inbound_edge_ids]
-        for node_var_key, node_var in node.pulp_vars.items():
-            if not node_var_key.startswith("LoadForWarehouse_"):
-                continue
-            prob += (
-                node_var
-                == pulp.lpSum(
-                    var
-                    for edge in in_edges
-                    for var_key, var in edge.pulp_vars.items()
-                    if var_key == node_var_key
-                    or (node.type is NodeType.lodging and var_key.startswith("LoadForWarehouse_"))
-                ),
-                f"LinkInboundLoadForWarehouse_{node_var_key}_at_{node.name()}",
-            )
-
-        # Outbound is not needed for the sink.
-        if node.type is NodeType.sink:
-            continue
-
-        # Ensure the each node's LoadForWarehouse equals the sum of the related outbound vars.
-        out_edges = [graph_data["edges"][edge] for edge in node.outbound_edge_ids]
-        for node_var_key, node_var in node.pulp_vars.items():
-            if not node_var_key.startswith("LoadForWarehouse_"):
-                continue
-            prob += (
-                node_var
-                == pulp.lpSum(
-                    var
-                    for edge in out_edges
-                    for var_key, var in edge.pulp_vars.items()
-                    if var_key == node_var_key
-                    or (node.type is NodeType.lodging and var_key.startswith("LoadForWarehouse_"))
-                ),
-                f"LinkOutboundLoadForWarehouse_{node_var_key}_at_{node.name()}",
-            )
+        if node.type is not NodeType.source:
+            link_node_to_edges(prob, node, "Inbound", node.inbound_edges)
+        if node.type is not NodeType.sink:
+            link_node_to_edges(prob, node, "Outbound", node.outbound_edges)
 
 
 def create_value_var(prob: pulp.LpProblem, graph_data: GraphData):
@@ -275,23 +256,14 @@ def add_warehouse_load_balance_constraints(prob: pulp.LpProblem, graph_data: Gra
 def add_warehouse_outbound_count_constraint(prob: pulp.LpProblem, graph_data: GraphData):
     """Ensure a single warehouse -> lodging -> sink path for each warehouse."""
     for warehouse in graph_data["warehouse_nodes"].values():
-        prob += (
-            pulp.lpSum(
-                graph_data["edges"][edge_key].pulp_vars["HasLoad"]
-                for edge_key in warehouse.outbound_edge_ids
-            )
-            <= 1
-        )
+        prob += pulp.lpSum(edge.pulp_vars["HasLoad"] for edge in warehouse.outbound_edges) <= 1
 
 
 def add_source_to_sink_constraint(prob: pulp.LpProblem, graph_data: GraphData):
     """Ensure source outbound load equals sink inbound load."""
-    # If all warehouses are balanced with demand then I don't think this should be required.
     prob += (
-        pulp.lpSum(
-            graph_data["nodes"]["source"].pulp_vars["Load"]
-            == graph_data["nodes"]["sink"].pulp_vars["Load"]
-        ),
+        graph_data["nodes"]["source"].pulp_vars["Load"]
+        == graph_data["nodes"]["sink"].pulp_vars["Load"],
         "BalanceSourceSink",
     )
 
@@ -312,20 +284,15 @@ def create_problem(graph_data, max_cost):
     add_warehouse_outbound_count_constraint(prob, graph_data)
     add_warehouse_load_balance_constraints(prob, graph_data)
 
-    nullLoadTypes = set()
-    for obj in graph_data["nodes"].values():
-        count = len([v for v in obj.pulp_vars.keys() if v.startswith("LoadForWarehouse")])
-        nullLoadTypes.add((obj.type, count))
-    print(nullLoadTypes)
-
-    # Enabling this conflicts with some other constraint resulting in a zero value solution.
+    # Enabling this slow convergence down _dramatically_.
+    # Using an assert after calling the solver is _much_ faster and gives the same result.
     # add_source_to_sink_constraint(prob, graph_data)
 
     prob.writeLP("test.lp")
     return prob
 
 
-def main(max_cost=15, top_n=0):
+def main(max_cost=50, top_n=0):
     graph_data = generate_empire_data(top_n)
     prob = create_problem(graph_data, max_cost)
 
@@ -337,6 +304,7 @@ def main(max_cost=15, top_n=0):
         options=["parallel=on", "threads=16"],
     )
     solver.solve(prob)
+    assert prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
 
     ref_data = get_reference_data(top_n)
     print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=True)

@@ -4,7 +4,7 @@ Generate the edges and nodes used for MILP optimized node empire solver.
 
 from __future__ import annotations
 from enum import IntEnum, auto
-from typing import Dict, Any
+from typing import Any, Dict, List, Union
 
 from file_utils import read_workerman_json, read_user_json, write_user_json
 
@@ -32,29 +32,26 @@ class Node:
         capacity: int,
         cost: int = 0,
         value: int = 0,
-        demand_destination_id=None,
+        LoadForWarehouse: List[Node] = [],
     ):
         self.id = id
         self.type = type
         self.capacity = capacity
         self.cost = cost
         self.value = value
-        self.demand_destination_id = demand_destination_id
-        self.demand_destination_name = (
-            f"warehouse_{demand_destination_id}" if demand_destination_id else None
-        )
+        self.LoadForWarehouse = LoadForWarehouse if LoadForWarehouse else []
         self.key = self.name()
-        self.inbound_edge_ids = []
-        self.outbound_edge_ids = []
+        self.inbound_edges: List[Edge] = []
+        self.outbound_edges: List[Edge] = []
         self.pulp_vars = {}
 
-    def name(self):
+    def name(self) -> str:
         if self.type in [NodeType.source, NodeType.sink]:
             return self.id
         return f"{self.type.name}_{self.id}"
 
-    def as_dict(self):
-        return {
+    def as_dict(self) -> Dict[str, Any]:
+        obj_dict = {
             "key": self.name(),
             "name": self.name(),
             "id": self.id,
@@ -62,11 +59,16 @@ class Node:
             "capacity": self.capacity,
             "cost": self.cost,
             "value": self.value,
-            "demand_destination_id": self.demand_destination_id,
-            "demand_destination_name": self.demand_destination_name,
-            "inbound_edge_ids": self.inbound_edge_ids,
-            "outbound_edge_ids": self.outbound_edge_ids,
+            "LoadForWarehouse": [],
+            "inbound_edges": [edge.key for edge in self.inbound_edges],
+            "outbound_edges": [edge.key for edge in self.outbound_edges],
         }
+        for node in self.LoadForWarehouse:
+            if node is self:
+                obj_dict["LoadForWarehouse"].append("self")
+            else:
+                obj_dict["LoadForWarehouse"].append(node.name())
+        return obj_dict
 
     def __repr__(self) -> str:
         return f"Node(name: {self.name()}, capacity: {self.capacity}, cost: {self.cost}, value: {self.value})"
@@ -83,21 +85,22 @@ class Edge:
         self.source = source
         self.destination = destination
         self.capacity = capacity
+        self.cost = cost
         self.key = (source.name(), destination.name())
         self.type = (source.type, destination.type)
         self.pulp_vars = {}
 
-    def as_dict(self):
+    def as_dict(self) -> Dict[str, Any]:
         return {
             "key": self.key,
             "name": self.name(),
             "capacity": self.capacity,
             "type": self.type,
-            "source": self.source.as_dict(),
-            "destination": self.destination.as_dict(),
+            "source": self.source.name(),
+            "destination": self.destination.name(),
         }
 
-    def name(self):
+    def name(self) -> str:
         return f"{self.source.name()}_to_{self.destination.name()}"
 
     def __repr__(self) -> str:
@@ -160,8 +163,8 @@ def add_edges(nodes: Dict[str, Node], edges: Dict[tuple, Edge], node_a: Node, no
     for edge in [edge_a, edge_b]:
         if edge.key not in edges and edge.capacity > 0:
             edges[edge.key] = edge
-            nodes[edge.source.key].outbound_edge_ids.append(edge.key)
-            nodes[edge.destination.key].inbound_edge_ids.append(edge.key)
+            nodes[edge.source.key].outbound_edges.append(edge)
+            nodes[edge.destination.key].inbound_edges.append(edge)
 
 
 def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
@@ -207,7 +210,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     kwargs `capacity`, `cost` and `warehouse` are required for lodging nodes.
     """
 
-    demand_destination_id = None
+    LoadForWarehouse = []
 
     match node_type:
         case NodeType.source:
@@ -223,7 +226,8 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             node_id = f"{origin.key}_for_{warehouse.key}"
             capacity = 1
             cost = 0
-            demand_destination_id = warehouse.id
+            # MARK
+            LoadForWarehouse = [warehouse]
             value = ref_data["origin_values"][origin.id][warehouse.id]["value"]
         case NodeType.origin:
             capacity = 1
@@ -237,7 +241,8 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             capacity = ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
             cost = 0
             value = 0
-            demand_destination_id = node_id
+            # MARK
+            LoadForWarehouse = []
         case NodeType.lodging:
             capacity = kwargs.get("capacity")
             cost = kwargs.get("cost")
@@ -246,7 +251,8 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
                 capacity and cost is not None and warehouse
             ), "Lodging nodes require 'capacity', 'cost' and 'warehouse' kwargs."
             value = 0
-            demand_destination_id = warehouse.id
+            # MARK
+            LoadForWarehouse = [warehouse]
         case NodeType.sink:
             capacity = ref_data["max_capacity"]
             cost = 0
@@ -255,8 +261,10 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             assert node_type is not NodeType.INVALID, "INVALID node type."
             return  # Unreachable: Stops pyright unbound error reporting.
 
-    node = Node(node_id, node_type, capacity, cost, value, demand_destination_id)
+    node = Node(node_id, node_type, capacity, cost, value, LoadForWarehouse)
     if node.key not in nodes:
+        if node.type is NodeType.warehouse:
+            node.LoadForWarehouse = [node]
         nodes[node.key] = node
     return nodes[node.key]
 
@@ -411,12 +419,6 @@ def generate_empire_data(top_n):
     nodes_dict = dict(sorted(nodes.items(), key=lambda item: item[1].type))
     edges_dict = dict(sorted(edges.items(), key=lambda item: item[1].as_dict()["type"]))
     warehouse_nodes = {k: v for k, v in nodes_dict.items() if v.type == NodeType.warehouse}
-
-    nullLoadTypes = set()
-    for obj in nodes_dict.values():
-        if obj.demand_destination_id is None:
-            nullLoadTypes.add(obj.type)
-    print(nullLoadTypes)
 
     data = {
         "nodes": nodes_dict,
