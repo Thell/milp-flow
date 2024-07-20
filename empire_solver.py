@@ -33,20 +33,18 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
     for node in graph_data["nodes"].values():
         match node.type:
             case NodeType.demand:
-                # Demand nodes only have their own load.
-
-                # MARK NODE DEMAND
-                # assert node.LoadForWarehouse
+                # Demand nodes can only have their own destination warehouse load.
+                # ✓ TODO: Populate LoadForWarehouse during data generation.
                 for LoadForWarehouse in node.LoadForWarehouse:
                     node.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
-                        # MARK NODE DEMAND
                         f"LoadForWarehouse_{LoadForWarehouse.id}_at_{node.name()}",
                         lowBound=0,
                         upBound=node.capacity,
                         cat="Integer",
                     )
             case NodeType.origin:
-                # Origins only have loads for the 'top_n' demand destinations.
+                # Origins can have loads for each of their inbound demand destinations.
+                # TODO populate this list into each origin node's LoadForWarehouse list.
                 for edge in node.inbound_edges:
                     for LoadForWarehouse in edge.source.LoadForWarehouse:
                         node.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
@@ -56,8 +54,7 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
                             cat="Integer",
                         )
             case NodeType.warehouse:
-                # Warehouses should only have their own loads.
-                # MARK Warehouse self id.
+                # Warehouses can only have their own loads.
                 for LoadForWarehouse in node.LoadForWarehouse:
                     node.pulp_vars[f"LoadForWarehouse_{LoadForWarehouse.id}"] = pulp.LpVariable(
                         f"LoadForWarehouse_{LoadForWarehouse.id}_at_{node.name()}",
@@ -66,7 +63,8 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
                         cat="Integer",
                     )
             case NodeType.lodging:
-                # Lodgings should only have their own loads.
+                # Lodgings can only have their own loads.
+                # TODO: populate the lodging node's LoadForWarehouse list with self value.
                 node.pulp_vars[f"LoadForWarehouse_{node.id}"] = pulp.LpVariable(
                     f"LoadForWarehouse_{node.id}_at_{node.name()}",
                     lowBound=0,
@@ -74,7 +72,8 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
                     cat="Integer",
                 )
             case NodeType.source | NodeType.waypoint | NodeType.town | NodeType.sink:
-                # Source, Waypoint and Sink nodes have a LoadForWarehouse var for each warehouse.
+                # These nodes can only have a load for each of the nearest_n warehouses.
+                # TODO: populate these node's LoadForWarehouse list during data generation.
                 for warehouse in graph_data["warehouse_nodes"].values():
                     node.pulp_vars[f"LoadForWarehouse_{warehouse.id}"] = pulp.LpVariable(
                         f"LoadForWarehouse_{warehouse.id}_at_{node.name()}",
@@ -284,9 +283,9 @@ def create_problem(graph_data, max_cost):
     add_warehouse_outbound_count_constraint(prob, graph_data)
     add_warehouse_load_balance_constraints(prob, graph_data)
 
-    # Enabling this slow convergence down _dramatically_.
+    # Enabling this slows convergence down _dramatically_.
     # Using an assert after calling the solver is _much_ faster and gives the same result.
-    # add_source_to_sink_constraint(prob, graph_data)
+    add_source_to_sink_constraint(prob, graph_data)
 
     prob.writeLP("test.lp")
     return prob
@@ -300,11 +299,11 @@ def main(max_cost=50, top_n=0):
         path="/home/thell/.local/bin/highs",
         keepFiles=True,
         threads=16,
-        logPath="/home/thell/milp-flow/highs_log_{max_cost}.txt",
+        logPath=f"/home/thell/milp-flow/highs_log_{max_cost}.txt",
         options=["parallel=on", "threads=16"],
     )
     solver.solve(prob)
-    assert prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
+    # assert prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
 
     ref_data = get_reference_data(top_n)
     print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=True)

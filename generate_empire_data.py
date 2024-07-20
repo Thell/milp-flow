@@ -4,7 +4,7 @@ Generate the edges and nodes used for MILP optimized node empire solver.
 
 from __future__ import annotations
 from enum import IntEnum, auto
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
 
 from file_utils import read_workerman_json, read_user_json, write_user_json
 
@@ -226,7 +226,6 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             node_id = f"{origin.key}_for_{warehouse.key}"
             capacity = 1
             cost = 0
-            # MARK
             LoadForWarehouse = [warehouse]
             value = ref_data["origin_values"][origin.id][warehouse.id]["value"]
         case NodeType.origin:
