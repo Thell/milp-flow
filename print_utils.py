@@ -1,7 +1,9 @@
 import json
+import natsort
 import pulp
 
 from file_utils import write_user_json
+from generate_empire_data import NodeType
 
 
 def print_solver_output(prob, data, edge_vars, doFull=False):
@@ -145,10 +147,9 @@ def print_solver_output(prob, data, edge_vars, doFull=False):
 #     # print(f"Transit nodes ({len(transit_nodes)}):\n{transit_nodes}")
 
 
-def print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=False):
+def print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=False):
     solution_vars = {}
-    if detailed:
-        print("\nDetailed Solution:")
+    gt0lt1_vars = set()
 
     for v in prob.variables():
         if v.varValue is not None and v.varValue > 0:
@@ -157,7 +158,13 @@ def print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=Fa
                 "lowBound": v.lowBound,
                 "upBound": v.upBound,
             }
-    cost = 0
+            if v.varValue < 1:
+                gt0lt1_vars.add(v.name)
+
+    calculated_cost = 0
+    outputs = []
+    edge_loads = []
+    waypoint_loads = []
     for k, v in solution_vars.items():
         if k.startswith("Load_"):
             kname = k.replace("Load_", "")
@@ -166,24 +173,52 @@ def print_empire_solver_output(prob, graph_data, ref_data, max_cost, detailed=Fa
                 source, destination = kname.split("_to_")
                 edge_key = (source, destination)
                 edge = graph_data["edges"].get(edge_key, None)
-                print(edge, v)
+                outputs.append(f"{edge}, {v}")
+                if (
+                    edge.source.type is NodeType.waypoint
+                    or edge.destination.type is NodeType.waypoint
+                ):
+                    edge_loads.append(v["value"])
             else:
                 # A node
                 node = graph_data["nodes"].get(kname, None)
-                print(node, v)
-                cost = cost + node.cost
+                outputs.append(f"{node}, {v}")
+                calculated_cost = calculated_cost + node.cost
+                if node.type is NodeType.waypoint:
+                    waypoint_loads.append(v["value"])
+    outputs = natsort.natsorted(outputs)
+
+    solver_cost = 0
+    if "cost" in solution_vars.keys():
+        solver_cost = int(solution_vars["cost"]["value"])
+
+    solver_value = round(solution_vars["value"]["value"])
+
+    if detailed:
+        print("\nDetailed Solution:")
+        for output in outputs:
+            print(output)
+
     print()
-    print("Load_source:", solution_vars["Load_source"]["value"])
-    print("Load_sink:", solution_vars["Load_sink"]["value"])
+    print("         Load_source:", solution_vars["Load_source"]["value"])
+    print("           Load_sink:", solution_vars["Load_sink"]["value"])
     print()
-    print("Calculated cost:", cost)
+    print("     Calculated cost:", calculated_cost)
+    print("         Solver cost:", calculated_cost)
+    print("            Max cost:", max_cost)
+    print("               Value:", round(solver_value))
+    print("          Value/Cost:", round(solver_value / max(1, solver_cost, calculated_cost)))
     print()
-    print("Reported Total Value:", round(solution_vars["value"]["value"]))
-    print(f"Reported Total Cost (max: {max_cost}):", solution_vars["cost"]["value"])
-    if solution_vars["cost"]["value"]:
-        print("$/CP:", round(solution_vars["value"]["value"] / solution_vars["cost"]["value"]))
+    print("    Num origin nodes:", len([x for x in outputs if x.startswith("Node(name: origin_")]))
+    print("   Max waypoint load:", max(waypoint_loads))
+    print("       Max edge load:", max(edge_loads))
     print()
+    if gt0lt1_vars:
+        print("WARNING: 0 < x < 1 vars:", gt0lt1_vars)
+        print()
 
     data = {"max_cost": max_cost, "solution_vars": solution_vars}
-    filepath = write_user_json(f"empire_solution_{int(solution_vars["cost"]["value"])}.json", data)
+    filepath = write_user_json(
+        f"solution_{top_n}_{solver_cost}_{calculated_cost}_{solver_value}.json", data
+    )
     print("Solution vars saved to:", filepath)

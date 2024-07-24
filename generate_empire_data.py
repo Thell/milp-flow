@@ -4,21 +4,39 @@ Generate the edges and nodes used for MILP optimized node empire solver.
 
 from __future__ import annotations
 from enum import IntEnum, auto
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TypedDict
+
+import networkx as nx
 
 from file_utils import read_workerman_json, read_user_json, write_user_json
 
 
+class GraphData(TypedDict):
+    nodes: Dict[str, Node]
+    edges: Dict[tuple[str, str], Edge]
+    warehouse_nodes: Dict[str, Node]
+
+
 class NodeType(IntEnum):
+    # Control - use all warehouses in LoadForWarehouse from edge.destination
     source = auto()
+    # Bottleneck - use since warehouse in LoadForWarehouse
     demand = auto()
     origin = auto()
+    # Transit - use nearest_n warehouses in LoadForWarehouse
     waypoint = auto()
     town = auto()
+    # Bottleneck - use single warehouse in LoadForWarehouse
     warehouse = auto()
     lodging = auto()
+    # Control - use all warehouses in LoadForWarehouse from edge.source
     sink = auto()
+
     INVALID = auto()
+
+    def is_node_capacity_type(self):
+        """These types of nodes have a different capcity than the LoadForWarehouse node."""
+        return self in [NodeType.demand, NodeType.origin, NodeType.lodging]
 
     def __repr__(self):
         return self.name
@@ -30,6 +48,7 @@ class Node:
         id: str,
         type: NodeType,
         capacity: int,
+        min_capacity: int = 0,
         cost: int = 0,
         value: int = 0,
         LoadForWarehouse: List[Node] = [],
@@ -37,6 +56,7 @@ class Node:
         self.id = id
         self.type = type
         self.capacity = capacity
+        self.min_capacity = min_capacity
         self.cost = cost
         self.value = value
         self.LoadForWarehouse = LoadForWarehouse if LoadForWarehouse else []
@@ -57,6 +77,7 @@ class Node:
             "id": self.id,
             "type": self.type.name.lower(),
             "capacity": self.capacity,
+            "min_capacity": self.capacity,
             "cost": self.cost,
             "value": self.value,
             "LoadForWarehouse": [],
@@ -71,7 +92,7 @@ class Node:
         return obj_dict
 
     def __repr__(self) -> str:
-        return f"Node(name: {self.name()}, capacity: {self.capacity}, cost: {self.cost}, value: {self.value})"
+        return f"Node(name: {self.name()}, capacity: {self.capacity}, min_capacity: {self.min_capacity}, cost: {self.cost}, value: {self.value})"
 
     def __eq__(self, other) -> bool:
         return self.name() == other.name()
@@ -166,6 +187,12 @@ def add_edges(nodes: Dict[str, Node], edges: Dict[tuple, Edge], node_a: Node, no
             nodes[edge.source.key].outbound_edges.append(edge)
             nodes[edge.destination.key].inbound_edges.append(edge)
 
+            if edge.destination.type is NodeType.origin:
+                assert len(edge.source.LoadForWarehouse) == 1, "LoadForWarehouse count mismatch."
+                edge.destination.LoadForWarehouse.extend(edge.source.LoadForWarehouse)
+            elif edge.destination.type is NodeType.lodging:
+                edge.destination.LoadForWarehouse = [edge.source]
+
 
 def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
     """Return the NodeType of the given node_id node.
@@ -211,6 +238,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     """
 
     LoadForWarehouse = []
+    min_capacity = 0
 
     match node_type:
         case NodeType.source:
@@ -233,7 +261,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             cost = ref_data["waypoint_data"][node_id]["CP"]
             value = 0
         case NodeType.waypoint | NodeType.town:
-            capacity = ref_data["max_capacity"]
+            capacity = ref_data["waypoint_capacity"]
             cost = ref_data["waypoint_data"][node_id]["CP"]
             value = 0
         case NodeType.warehouse:
@@ -244,11 +272,12 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             LoadForWarehouse = []
         case NodeType.lodging:
             capacity = kwargs.get("capacity")
-            cost = kwargs.get("cost")
+            min_capacity = kwargs.get("min_capacity")
             warehouse = kwargs.get("warehouse")
+            cost = kwargs.get("cost")
             assert (
-                capacity and cost is not None and warehouse
-            ), "Lodging nodes require 'capacity', 'cost' and 'warehouse' kwargs."
+                capacity and (min_capacity is not None) and (cost is not None) and warehouse
+            ), "Lodging nodes require 'capacity', 'min_capacity' 'cost' and 'warehouse' kwargs."
             value = 0
             # MARK
             LoadForWarehouse = [warehouse]
@@ -260,18 +289,19 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             assert node_type is not NodeType.INVALID, "INVALID node type."
             return  # Unreachable: Stops pyright unbound error reporting.
 
-    node = Node(node_id, node_type, capacity, cost, value, LoadForWarehouse)
+    node = Node(node_id, node_type, capacity, min_capacity, cost, value, LoadForWarehouse)
     if node.key not in nodes:
         if node.type is NodeType.warehouse:
             node.LoadForWarehouse = [node]
         nodes[node.key] = node
+
     return nodes[node.key]
 
 
-def get_reference_data(top_n):
+def get_reference_data(lodging_bonus, top_n):
     """Read and prepare data from reference json files."""
     ref_data = {
-        "lodging_bonus": 1,
+        "lodging_bonus": lodging_bonus,  # There's always at least 1 free lodging.
         "top_n_origin_values": top_n,
         "all_plantzones": read_workerman_json("plantzone.json").keys(),
         "lodging_data": read_workerman_json("all_lodging_storage.json"),
@@ -300,10 +330,10 @@ def get_reference_data(top_n):
     return ref_data
 
 
-def print_sample_nodes(nodes: Dict[str, Node], detailed: bool = False):
+def print_sample_nodes(graph_data: GraphData, detailed: bool = False):
     """Print sample nodes."""
     seen_node_types = set()
-    for _, node in nodes.items():
+    for _, node in graph_data["nodes"].items():
         if node.type in seen_node_types:
             continue
         seen_node_types.add(node.type)
@@ -313,10 +343,10 @@ def print_sample_nodes(nodes: Dict[str, Node], detailed: bool = False):
             print()
 
 
-def print_sample_edges(edges: Dict[tuple, Edge], detailed: bool = False):
+def print_sample_edges(graph_data: GraphData, detailed: bool = False):
     """Print sample edges."""
     seen_edge_prefixes = set()
-    for _, edge in edges.items():
+    for _, edge in graph_data["edges"].items():
         prefix_pair = (edge.source.type.value, edge.destination.type.value)
         if prefix_pair in seen_edge_prefixes:
             continue
@@ -387,58 +417,105 @@ def process_town(
     )
     add_edges(nodes, edges, town, warehouse_node)
 
+    min_capacity = 0
     for capacity, lodging_data in lodging_data.items():
         if capacity == "max_capacity":
             continue
+        max_capacity = int(capacity) + ref_data["lodging_bonus"]
         lodging_node = get_node(
             nodes,
             f"{warehouse_node.id}_for_{int(capacity) + lodging_bonus}",
             NodeType.lodging,
             ref_data,
-            capacity=int(capacity) + ref_data["lodging_bonus"],
+            capacity=max_capacity,
+            min_capacity=min_capacity,
             cost=lodging_data[0].get("cost"),
             warehouse=warehouse_node,
         )
+        min_capacity = max_capacity + 1
         add_edges(nodes, edges, warehouse_node, lodging_node)
         add_edges(nodes, edges, lodging_node, nodes["sink"])
 
 
-def generate_empire_data(top_n):
+def nearest_n_warehouses(ref_data: Dict[str, Any], graph_data: GraphData, nearest_n: int):
+    waypoint_graph = nx.DiGraph()
+    for node in graph_data["nodes"].values():
+        waypoint_graph.add_node(node.id, type=node.type)
+
+    for edge in graph_data["edges"].values():
+        weight = edge.destination.cost
+        if "1727" in edge.name():
+            weight = 999999
+        waypoint_graph.add_edge(edge.source.id, edge.destination.id, weight=weight)
+
+    all_pairs = dict(nx.all_pairs_bellman_ford_path_length(waypoint_graph, weight="weight"))
+
+    nearest_warehouses = {}
+    nearest_warehouse_nodes = {}
+
+    for node_id, node in graph_data["nodes"].items():
+        if node.type in {NodeType.waypoint, NodeType.town}:
+            distances = []
+            for warehouse_key, warehouse in graph_data["warehouse_nodes"].items():
+                town_id = ref_data["warehouse_to_town"][warehouse.id]
+                distances.append((warehouse, all_pairs[node.id][town_id]))
+            nearest_warehouses[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
+            nearest_warehouse_nodes[node_id] = [w for w, _ in nearest_warehouses[node_id]]
+
+    return nearest_warehouse_nodes
+
+
+def contract_graph(graph_data: GraphData):
+    pass
+
+
+def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
     """Generate and return a Dict of Node and Edge objects composing the empire data."""
 
-    edges: Dict[tuple, Edge] = {}
+    edges: Dict[tuple[str, str], Edge] = {}
     nodes: Dict[str, Node] = {}
-    ref_data = get_reference_data(top_n)
+    ref_data = get_reference_data(lodging_bonus, top_n)
+    ref_data["waypoint_capacity"] = waypoint_capacity
 
     get_node(nodes, "source", NodeType.source, ref_data)
     get_node(nodes, "sink", NodeType.sink, ref_data)
     process_links(nodes, edges, ref_data)
-    # populate_node_edge_links(nodes, edges)
 
     nodes_dict = dict(sorted(nodes.items(), key=lambda item: item[1].type))
     edges_dict = dict(sorted(edges.items(), key=lambda item: item[1].as_dict()["type"]))
     warehouse_nodes = {k: v for k, v in nodes_dict.items() if v.type == NodeType.warehouse}
 
-    data = {
+    graph_data: GraphData = {
         "nodes": nodes_dict,
-        "warehouse_nodes": warehouse_nodes,
         "edges": edges_dict,
+        "warehouse_nodes": warehouse_nodes,
     }
 
-    return data
+    # All warehouse nodes have now been generated, finalize LoadForWarehouse entries
+    nearest_warehouses = nearest_n_warehouses(ref_data, graph_data, nearest_n)
+    for node in nodes_dict.values():
+        if node.type in [NodeType.source, NodeType.sink]:
+            node.LoadForWarehouse = [w for w in warehouse_nodes.values()]
+        elif node.type in [NodeType.waypoint, NodeType.town]:
+            node.LoadForWarehouse = [w for w in nearest_warehouses[node.key]]
+
+    contract_graph(graph_data)
+
+    return graph_data
 
 
 def main(write=True):
-    data = generate_empire_data(top_n=1)  # top_n 1 to 24
+    # n 1 to 24
+    graph_data = generate_empire_data(lodging_bonus=4, top_n=2, nearest_n=5, waypoint_capacity=50)
 
-    print_sample_nodes(data["nodes"], detailed=False)
-    print_sample_edges(data["edges"], detailed=False)
-    print(f"Num edges: {len(data["edges"])}, Num nodes: {len(data["nodes"])}")
+    print_sample_nodes(graph_data, detailed=True)
+    print_sample_edges(graph_data, detailed=False)
+    print(f"Num edges: {len(graph_data["edges"])}, Num nodes: {len(graph_data["nodes"])}")
 
     if write:
         data = {
-            "edges": [edge.as_dict() for _, edge in data["edges"].items()],
-            "nodes": [node.as_dict() for _, node in data["nodes"].items()],
+            "edges": [edge.as_dict() for _, edge in graph_data["edges"].items()],
+            "nodes": [node.as_dict() for _, node in graph_data["nodes"].items()],
         }
 
         filepath = write_user_json("full_empire.json", data)
