@@ -1,11 +1,11 @@
 """MILP Worker Node Empire Problem
 (See `generate_empire_data.py` for node and edge generation details.)
 
-Goal: Maximize demand value - cost
+Goal: Maximize supply value - cost
 
-The model is based on flow where source outbound load == sink inbound load per demand destination.
+The model is based on flow where source outbound load == sink inbound load per supply destination.
 
-* All edges and nodes have a load which is calculated per demand warehouse.
+* All edges and nodes have a load which is calculated per supply warehouse.
 * All edges and nodes have a capacity which the calculated load must not exceed.
 """
 
@@ -38,7 +38,8 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Edge, load_vars: 
     test_type = obj.type if obj_is_node else obj.destination.type
     if test_type in [NodeType.waypoint, NodeType.town]:
         # Linking constraint to ensure TotalLoad is either 0 or within [1, capacity]
-        prob += load_var >= has_load_var, f"ClampLoadMin_{obj.name()}"
+        # prob += load_var >= has_load_var, f"ClampLoadMin_{obj.name()}"
+        pass
     elif test_type is NodeType.lodging:
         # Linking constraint to ensure TotalLoad is either 0 or within [min_capacity, capacity]
         min_capacity = obj.min_capacity if obj_is_node else obj.destination.min_capacity
@@ -46,6 +47,10 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Edge, load_vars: 
 
     # Linking constraint to ensure TotalLoad is less than capacity.
     prob += load_var <= has_load_var * obj.capacity, f"ClampLoadMax_{obj.name()}"
+
+    # Ensure has_load_var is 1 if load_var is non-zero and 0 if load_var is zero
+    prob += load_var <= 1e-5 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
+    prob += load_var - (has_load_var * obj.capacity) <= 0, f"ForceZeroLoad_{obj.name()}"
 
     # Ensure consistency between TotalLoad and HasLoad
     prob += has_load_var <= load_var, f"LinkLoadHasLoad_{obj.name()}"
@@ -65,18 +70,18 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
                 lowBound=0,
                 upBound=node.capacity
                 # # TODO: Benchmark this on larger samples, I think it is superceded by ClampBySource
-                # # Demand, origin and lodging nodes are load limited.
-                if node.type in [NodeType.demand, NodeType.origin, NodeType.lodging]
+                # # supply, origin and lodging nodes are load limited.
+                if node.type in [NodeType.supply, NodeType.origin, NodeType.lodging]
                 else LoadForWarehouse.capacity,
                 cat="Integer",
             )
             node.pulp_vars[load_key] = load_var
             warehouse_load_vars.append(load_var)
 
-            if node.type in [NodeType.waypoint, NodeType.town]:
-                source_load = graph_data["nodes"]["source"].pulp_vars[load_key]
-                constraint_key = f"ClampBySource_{LoadForWarehouse.id}_at_{node.name()}"
-                prob += load_var <= source_load, constraint_key
+            # if node.type in [NodeType.waypoint, NodeType.town]:
+            #     source_load = graph_data["nodes"]["source"].pulp_vars[load_key]
+            #     constraint_key = f"ClampBySource_{LoadForWarehouse.id}_at_{node.name()}"
+            #     prob += load_var <= source_load, constraint_key
 
         create_load_hasload_vars(prob, node, warehouse_load_vars)
 
@@ -105,10 +110,10 @@ def create_edge_vars(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int)
             edge.pulp_vars[load_key] = load_var
             warehouse_load_vars.append(load_var)
 
-            if edge.destination.type in [NodeType.waypoint, NodeType.town]:
-                source_load = graph_data["nodes"]["source"].pulp_vars[load_key]
-                constraint_key = f"ClampBySource_{LoadForWarehouse.id}_at_{edge.name()}"
-                prob += load_var <= source_load, constraint_key
+            # if edge.destination.type in [NodeType.waypoint, NodeType.town]:
+            #     source_load = graph_data["nodes"]["source"].pulp_vars[load_key]
+            #     constraint_key = f"ClampBySource_{LoadForWarehouse.id}_at_{edge.name()}"
+            #     prob += load_var <= source_load, constraint_key
 
         create_load_hasload_vars(prob, edge, warehouse_load_vars)
 
@@ -146,14 +151,14 @@ def link_node_and_edge_vars(prob: pulp.LpProblem, graph_data: GraphData):
 
 
 def create_value_var(prob: pulp.LpProblem, graph_data: GraphData):
-    """Sum variable of value at demand nodes with load."""
+    """Sum variable of value at supply nodes with load."""
     value_var = pulp.LpVariable("value", lowBound=0)
     prob += (
         value_var
         == pulp.lpSum(
             node.value * node.pulp_vars["HasLoad"]
             for node in graph_data["nodes"].values()
-            if node.type is NodeType.demand
+            if node.type is NodeType.supply
         ),
         "TotalValue",
     )
@@ -176,12 +181,12 @@ def create_cost_var(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int):
 
 
 def add_warehouse_load_balance_constraints(prob: pulp.LpProblem, graph_data: GraphData):
-    """Ensure each warehouse receives its total origin demand."""
+    """Ensure each warehouse receives its total origin supply."""
     for warehouse in graph_data["warehouse_nodes"].values():
         source_load = graph_data["nodes"]["source"].pulp_vars[f"LoadForWarehouse_{warehouse.id}"]
         prob += (
             warehouse.pulp_vars["Load"] == source_load,
-            f"BalanceDemandLoadForWarehouse_{warehouse.id}",
+            f"BalancesupplyLoadForWarehouse_{warehouse.id}",
         )
 
 
@@ -276,18 +281,18 @@ def create_problem(graph_data, max_cost):
     prob += total_value_var - total_cost_var, "ObjectiveFunction"
     prob += total_cost_var <= max_cost, "MaxCost"
 
-    add_reverse_edge_constraint(prob, graph_data)
+    # add_reverse_edge_constraint(prob, graph_data)
     add_warehouse_outbound_count_constraint(prob, graph_data)
     add_warehouse_load_balance_constraints(prob, graph_data)
-    add_waypoint_clamp_by_source_constraints(prob, graph_data)
+    # add_waypoint_clamp_by_source_constraints(prob, graph_data)
     add_source_to_sink_constraint(prob, graph_data)
 
     return prob
 
 
-def main(max_cost=20, lodging_bonus=1, top_n=3, nearest_n=10, waypoint_capacity=10):
+def main(max_cost=30, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
-    top_n: count of Demand nodes per warehouse by value
+    top_n: count of supply nodes per warehouse by value
     nearest_n: count of nearest warehouses available on waypoint nodes
     waypoint_capacity: max loads on a waypoint
     """
@@ -309,7 +314,7 @@ def main(max_cost=20, lodging_bonus=1, top_n=3, nearest_n=10, waypoint_capacity=
         ],
     )
     solver.solve(prob)
-    # prob.solve() # use cbc instead of HiGHS
+    # prob.solve(solver=pulp.HiGHS())
 
     assert prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
 

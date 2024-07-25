@@ -21,7 +21,7 @@ class NodeType(IntEnum):
     # Control - use all warehouses in LoadForWarehouse from edge.destination
     source = auto()
     # Bottleneck - use since warehouse in LoadForWarehouse
-    demand = auto()
+    supply = auto()
     origin = auto()
     # Transit - use nearest_n warehouses in LoadForWarehouse
     waypoint = auto()
@@ -36,7 +36,7 @@ class NodeType(IntEnum):
 
     def is_node_capacity_type(self):
         """These types of nodes have a different capcity than the LoadForWarehouse node."""
-        return self in [NodeType.demand, NodeType.origin, NodeType.lodging]
+        return self in [NodeType.supply, NodeType.origin, NodeType.lodging]
 
     def __repr__(self):
         return self.name
@@ -121,6 +121,9 @@ class Edge:
             "destination": self.destination.name(),
         }
 
+    def allowable_loads(self) -> set[Node]:
+        return set(self.source.LoadForWarehouse).intersection(set(self.destination.LoadForWarehouse))
+
     def name(self) -> str:
         return f"{self.source.name()}_to_{self.destination.name()}"
 
@@ -164,8 +167,8 @@ def add_edges(nodes: Dict[str, Node], edges: Dict[tuple, Edge], node_a: Node, no
         node_a, node_b = node_b, node_a
 
     edge_configurations = {
-        (NodeType.source, NodeType.demand): (1, 0),
-        (NodeType.demand, NodeType.origin): (1, 0),
+        (NodeType.source, NodeType.supply): (1, 0),
+        (NodeType.supply, NodeType.origin): (1, 0),
         (NodeType.origin, NodeType.waypoint): (1, 0),
         (NodeType.origin, NodeType.town): (1, 0),
         (NodeType.waypoint, NodeType.waypoint): (node_b.capacity, node_a.capacity),
@@ -232,7 +235,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     """
     Generate, add and return node based on NodeType.
 
-    kwargs `origin` and `warehouse` are required for demand nodes.
+    kwargs `origin` and `warehouse` are required for supply nodes.
     kwargs `capacity` is required for warehouse nodes.
     kwargs `capacity`, `cost` and `warehouse` are required for lodging nodes.
     """
@@ -245,10 +248,10 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             capacity = ref_data["max_capacity"]
             cost = 0
             value = 0
-        case NodeType.demand:
+        case NodeType.supply:
             origin = kwargs.get("origin")
             warehouse = kwargs.get("warehouse")
-            assert warehouse and origin, "Demand nodes require 'warehouse' and 'origin' kwargs."
+            assert warehouse and origin, "supply nodes require 'warehouse' and 'origin' kwargs."
             isinstance(origin, Node)
             isinstance(warehouse, Node)
             node_id = f"{origin.key}_for_{warehouse.key}"
@@ -383,7 +386,7 @@ def process_links(nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Di
 def process_origin(
     nodes: Dict[str, Node], edges: Dict[tuple, Edge], origin: Node, ref_data: Dict[str, Any]
 ):
-    """Add origin demand value nodes and edges between the source and origin nodes."""
+    """Add origin supply value nodes and edges between the source and origin nodes."""
     for i, (warehouse_id, value_data) in enumerate(ref_data["origin_values"][origin.id].items()):
         if i > ref_data["top_n_origin_values"]:
             return
@@ -391,16 +394,16 @@ def process_origin(
         if value_data["value"] == 0:
             continue
 
-        demand_node = get_node(
+        supply_node = get_node(
             nodes,
             "",
-            NodeType.demand,
+            NodeType.supply,
             ref_data,
             origin=origin,
             warehouse=warehouse,
         )
-        add_edges(nodes, edges, nodes["source"], demand_node)
-        add_edges(nodes, edges, demand_node, origin)
+        add_edges(nodes, edges, nodes["source"], supply_node)
+        add_edges(nodes, edges, supply_node, origin)
 
 
 def process_town(
