@@ -34,16 +34,15 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Edge, load_vars: 
     has_load_var = pulp.LpVariable(f"HasLoad_{obj.name()}", cat="Binary")
     obj.pulp_vars["HasLoad"] = has_load_var
 
-    obj_is_node = isinstance(obj, Node)
-    test_type = obj.type if obj_is_node else obj.destination.type
-    if test_type in [NodeType.waypoint, NodeType.town]:
-        # Linking constraint to ensure TotalLoad is either 0 or within [1, capacity]
-        # prob += load_var >= has_load_var, f"ClampLoadMin_{obj.name()}"
-        pass
-    elif test_type is NodeType.lodging:
-        # Linking constraint to ensure TotalLoad is either 0 or within [min_capacity, capacity]
-        min_capacity = obj.min_capacity if obj_is_node else obj.destination.min_capacity
-        prob += load_var >= has_load_var * min_capacity, f"ClampLoadMin_{obj.name()}"
+    # obj_is_node = isinstance(obj, Node)
+    # test_type = obj.type if obj_is_node else obj.destination.type
+    # if test_type in [NodeType.waypoint, NodeType.town]:
+    #     # Linking constraint to ensure TotalLoad is either 0 or within [1, capacity]
+    #     prob += load_var >= has_load_var, f"ClampLoadMin_{obj.name()}"
+    # elif test_type is NodeType.lodging:
+    #     # Linking constraint to ensure TotalLoad is either 0 or within [min_capacity, capacity]
+    #     min_capacity = obj.min_capacity if obj_is_node else obj.destination.min_capacity
+    #     prob += load_var >= has_load_var * min_capacity, f"ClampLoadMin_{obj.name()}"
 
     # Linking constraint to ensure TotalLoad is less than capacity.
     prob += load_var <= has_load_var * obj.capacity, f"ClampLoadMax_{obj.name()}"
@@ -290,7 +289,7 @@ def create_problem(graph_data, max_cost):
     return prob
 
 
-def main(max_cost=30, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
+def main(max_cost=100, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
     top_n: count of supply nodes per warehouse by value
     nearest_n: count of nearest warehouses available on waypoint nodes
@@ -300,6 +299,7 @@ def main(max_cost=30, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=1
     prob = create_problem(graph_data, max_cost)
     prob.writeLP(f"last_{max_cost}.lp")
 
+    # This solution resulted in taking
     solver = pulp.HiGHS_CMD(
         path="/home/thell/.local/bin/highs",
         keepFiles=True,
@@ -308,18 +308,79 @@ def main(max_cost=30, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=1
         options=[
             "parallel=on",
             "threads=16",
-            # "mip_feasibility_tolerance=1e-6",
+            # "mip_heuristic_effort=1",
+            "mip_feasibility_tolerance=1e-9",
             "mip_improving_solution_save=on",
-            f"mip_improving_solution_file=highs_improved_solution_{max_cost}.sol",
+            f"mip_improving_solution_file=highs_improved_solution_{max_cost}_c.sol",
         ],
     )
     solver.solve(prob)
-    # prob.solve(solver=pulp.HiGHS())
-
-    assert prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
-
     ref_data = get_reference_data(lodging_bonus, top_n)
     print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=True)
+
+    # # This solution resulted in taking 19m with no fractional values. 51m and 100 with no fracts
+    # solver = pulp.HiGHS_CMD(
+    #     path="/home/thell/.local/bin/highs",
+    #     keepFiles=True,
+    #     threads=16,
+    #     logPath=f"/home/thell/milp-flow/highs_log_{max_cost}.txt",
+    #     options=[
+    #         "parallel=on",
+    #         "threads=16",
+    #         # "mip_heuristic_effort=1",
+    #         "mip_feasibility_tolerance=1e-9",
+    #         "mip_improving_solution_save=on",
+    #         f"mip_improving_solution_file=highs_improved_solution_{max_cost}_c.sol",
+    #     ],
+    # )
+    # solver.solve(prob)
+    # ref_data = get_reference_data(lodging_bonus, top_n)
+    # print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=True)
+
+    # # This solution resulted in taking 11 minutes with a cost of 44 vs 40 max limit.
+    # solver = pulp.HiGHS_CMD(
+    #     path="/home/thell/.local/bin/highs",
+    #     keepFiles=True,
+    #     threads=16,
+    #     logPath=f"/home/thell/milp-flow/highs_log_{max_cost}.txt",
+    #     options=[
+    #         "parallel=on",
+    #         "threads=16",
+    #         "mip_heuristic_effort=1",
+    #         "mip_feasibility_tolerance=1e-5",
+    #         "mip_improving_solution_save=on",
+    #         f"mip_improving_solution_file=highs_improved_solution_{max_cost}_a.sol",
+    #     ],
+    # )
+    # solver.solve(prob)
+    # ref_data = get_reference_data(lodging_bonus, top_n)
+    # print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=True)
+
+    # Interestingly this setup resulted in the solver taking 37 minutes and having a massive amount
+    # of fractional values to eliminate cost. 88 actual cost vs 40 max limit.
+    # solver = pulp.HiGHS_CMD(
+    #     path="/home/thell/.local/bin/highs",
+    #     keepFiles=True,
+    #     threads=16,
+    #     logPath=f"/home/thell/milp-flow/highs_log_{max_cost}.txt",
+    #     options=[
+    #         "parallel=on",
+    #         "threads=16",
+    #         "mip_heuristic_effort=1",
+    #         "mip_feasibility_tolerance=1e-7",
+    #         "mip_improving_solution_save=on",
+    #         f"mip_improving_solution_file=highs_improved_solution_{max_cost}_b.sol",
+    #     ],
+    # )
+    # solver.solve(prob)
+    # ref_data = get_reference_data(lodging_bonus, top_n)
+    # print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=True)
+
+    # prob.solve() # use cbc instead of HiGHS
+    # ref_data = get_reference_data(lodging_bonus, top_n)
+    # print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=True)
+
+    assert prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
 
 
 if __name__ == "__main__":
