@@ -5,8 +5,20 @@ Goal: Maximize supply value - cost
 
 The model is based on flow where source outbound load == sink inbound load per supply destination.
 
-* All edges and nodes have a load which is calculated per supply warehouse.
-* All edges and nodes have a capacity which the calculated load must not exceed.
+* All edges and nodes have a load per supply warehouse equal to the sum of the inbound/source loads.
+* All edges and nodes loads must be <= source supply. This is more robust for result verification
+  but requires more time. Using the max warehouse load as the load limit works as well.
+
+Nodes are subject to:
+  - inbound == outbound
+  - single outbound edge per load
+Edges are subject to:
+  - edge and reverse edge load mutual exclusivity
+
+WARNING: Solver integer tolerance is extremely important in this problem. Solvers _will_ use
+the tolerance to eliminate node costs which are calculated using the binary load indicators.
+With HiGHS the default of 1e-6 is not tight enough, using `mip_feasibility_tolerance=1e-9`
+results in proper binary assignments but takes much longer to solve.
 """
 
 from typing import List
@@ -44,15 +56,25 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Edge, load_vars: 
     #     min_capacity = obj.min_capacity if obj_is_node else obj.destination.min_capacity
     #     prob += load_var >= has_load_var * min_capacity, f"ClampLoadMin_{obj.name()}"
 
-    # Linking constraint to ensure TotalLoad is less than capacity.
-    prob += load_var <= has_load_var * obj.capacity, f"ClampLoadMax_{obj.name()}"
-
     # Ensure has_load_var is 1 if load_var is non-zero and 0 if load_var is zero
-    prob += load_var <= 1e-5 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
-    prob += load_var - (has_load_var * obj.capacity) <= 0, f"ForceZeroLoad_{obj.name()}"
+
+    # Linking constraint to ensure TotalLoad is less than capacity.
+    prob += load_var <= obj.capacity * has_load_var, f"ClampLoadMax_{obj.name()}"
+
+    # This works fine with primal_feasibility_tolerance=1e-9
+    # prob += load_var <= 1e-5 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
+
+    # Testing to see if 1e-6 on this _and_ the tolerance setting will work...
+    prob += load_var <= 1e-6 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
+    prob += load_var - (obj.capacity * has_load_var) <= 0, f"ForceZeroLoad_{obj.name()}"
 
     # Ensure consistency between TotalLoad and HasLoad
     prob += has_load_var <= load_var, f"LinkLoadHasLoad_{obj.name()}"
+
+    # eps = 0.0001
+    # M = obj.capacity + eps
+    # prob += load_var >= 0 + eps - M * (1 - has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
+    # prob += load_var <= 0 + M * has_load_var, f"ForceZeroLoad_{obj.name()}"
 
 
 def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
@@ -179,7 +201,7 @@ def create_cost_var(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int):
     return cost_var
 
 
-def add_warehouse_load_balance_constraints(prob: pulp.LpProblem, graph_data: GraphData):
+def add_source_to_warehouse_constraints(prob: pulp.LpProblem, graph_data: GraphData):
     """Ensure each warehouse receives its total origin supply."""
     for warehouse in graph_data["warehouse_nodes"].values():
         source_load = graph_data["nodes"]["source"].pulp_vars[f"LoadForWarehouse_{warehouse.id}"]
@@ -209,7 +231,7 @@ def add_waypoint_clamp_by_source_constraints(prob: pulp.LpProblem, graph_data: G
                     prob += var <= source_load, var_name
 
 
-def add_warehouse_outbound_count_constraint(prob: pulp.LpProblem, graph_data: GraphData):
+def add_warehouse_to_lodging_constraints(prob: pulp.LpProblem, graph_data: GraphData):
     """Ensure a single warehouse -> lodging -> sink path for each warehouse."""
     for warehouse in graph_data["warehouse_nodes"].values():
         prob += pulp.lpSum(edge.pulp_vars["HasLoad"] for edge in warehouse.outbound_edges) <= 1
@@ -227,42 +249,78 @@ def add_source_to_sink_constraint(prob: pulp.LpProblem, graph_data: GraphData):
 def add_reverse_edge_constraint(prob: pulp.LpProblem, graph_data: GraphData):
     """Ensure reverse edges on waypoint/town nodes don't return loads."""
 
-    def is_transit_node(node):
-        return node.type in [NodeType.waypoint, NodeType.town]
+    # Only waypoint/town edges have reverse edges.
+    def is_transit_edge(edge):
+        return (edge.source.type in [NodeType.waypoint, NodeType.town]) and (
+            edge.destination.type in [NodeType.waypoint, NodeType.town]
+        )
 
+    seen_edges = []
     for edge in graph_data["edges"].values():
-        if not is_transit_node(edge.source) or not is_transit_node(edge.destination):
+        if not is_transit_edge(edge):
             continue
 
         reverse_edge = graph_data["edges"][(edge.destination.name(), edge.source.name())]
+        if edge.key in seen_edges or reverse_edge.key in seen_edges:
+            continue
+        seen_edges.append(edge.key)
+        seen_edges.append(reverse_edge.key)
+
         shared_keys = list(set(edge.pulp_vars.keys()).intersection(reverse_edge.pulp_vars.keys()))
         for var_key in shared_keys:
             if var_key.startswith("LoadForWarehouse"):
-                # Make them mutally exclusive
-                # Binary variables indicating if there's a load on the respective edges
-                b_forward = pulp.LpVariable(f"bForward_{edge.name()}_{var_key}", cat="Binary")
-                b_reverse = pulp.LpVariable(
-                    f"bReverse_{reverse_edge.name()}_{var_key}", cat="Binary"
-                )
-
-                forward_var = edge.pulp_vars[var_key]
-                reverse_var = reverse_edge.pulp_vars[var_key]
-
+                # Forward load indicator.
+                b_forward = pulp.LpVariable(f"b{var_key}_on_{edge.name()}", cat="Binary")
+                edge.pulp_vars[f"b{var_key}"] = b_forward
                 prob += (
-                    forward_var <= edge.destination.capacity * b_forward,
-                    f"ForwardLoad_{edge.name()}_{var_key}",
-                )
-                prob += (
-                    reverse_var <= edge.source.capacity * b_reverse,
-                    f"ReverseLoad_{reverse_edge.name()}_{var_key}",
+                    edge.pulp_vars[var_key] <= edge.destination.capacity * b_forward,
+                    f"Linkb{var_key}_on_{edge.name()}",
                 )
 
-                # Ensure that the load on the reverse edge is zero if there's
-                # load on the forward edge and vice versa
+                # Reverse load indicator.
+                b_reverse = pulp.LpVariable(f"b{var_key}_on_{reverse_edge.name()}", cat="Binary")
+                reverse_edge.pulp_vars[f"b{var_key}"] = b_reverse
+                prob += (
+                    reverse_edge.pulp_vars[var_key] <= edge.source.capacity * b_reverse,
+                    f"Linkb{var_key}_on_{reverse_edge.name()}",
+                )
+
+                # Mutual exclusion.
                 prob += (
                     b_forward + b_reverse <= 1,
-                    f"MutualExclusivity_{edge.name()}_{reverse_edge.name()}_{var_key}",
+                    f"MutualExclusion{var_key}_{edge.name()}_{reverse_edge.name()}",
                 )
+
+
+def add_waypoint_single_outbound_constraint(prob: pulp.LpProblem, graph_data: GraphData):
+    """Ensure transit nodes do not split a load to multiple outbound edges.
+    NOTE: do not call this prior to calling add_reverse_edge_constraint() because
+    transit edges have the binary indicators added in add_reverse_edge_constraint().
+    The binary indicators are in the edge's pulp_vars keyed with `bLoadForWarehouse_{}`
+    TODO: add binary indicators during edge creation?
+    """
+
+    def is_transit_edge(edge):
+        return (edge.source.type in [NodeType.waypoint, NodeType.town]) and (
+            edge.destination.type in [NodeType.waypoint, NodeType.town]
+        )
+
+    for node in graph_data["nodes"].values():
+        if node.type not in [NodeType.waypoint, NodeType.town]:
+            continue
+
+        outbound_indicator_vars = {}
+        for edge in node.outbound_edges:
+            if is_transit_edge(edge):
+                for key, var in edge.pulp_vars.items():
+                    if key.startswith("bLoadForWarehouse_"):
+                        if key not in outbound_indicator_vars:
+                            outbound_indicator_vars[key] = []
+                        outbound_indicator_vars[key].append(var)
+
+        for vars in outbound_indicator_vars.values():
+            if len(vars) > 1:
+                prob += pulp.lpSum(vars) <= 1
 
 
 def create_problem(graph_data, max_cost):
@@ -280,16 +338,66 @@ def create_problem(graph_data, max_cost):
     prob += total_value_var - total_cost_var, "ObjectiveFunction"
     prob += total_cost_var <= max_cost, "MaxCost"
 
-    # add_reverse_edge_constraint(prob, graph_data)
-    add_warehouse_outbound_count_constraint(prob, graph_data)
-    add_warehouse_load_balance_constraints(prob, graph_data)
-    # add_waypoint_clamp_by_source_constraints(prob, graph_data)
+    add_source_to_warehouse_constraints(prob, graph_data)
+    add_warehouse_to_lodging_constraints(prob, graph_data)
     add_source_to_sink_constraint(prob, graph_data)
+
+    # NOTE: Test runtimes with these constraints...
+    # Right now the solver is coming up with correct solutions but with phantom loads (unnecessary
+    # loads that don't contribute to the optimal solution) being added in the transit nodes where
+    # they are allowed because there isn't a constraint to stop inter-waypoint cycles.
+    # While these constraints would avoid direct A <-> B cycles and make the outbound routes more
+    # specific, they still wouldn't stop A -> B -> C -> A cycles. The only thing that would stop all
+    # of these types of cycles is linking the source load as the load capacity on waypoint nodes,
+    # which is noted below.
+    # When run to completion (aka low gap), these cycles only seem to exist on nodes that already
+    # have a load incurring a node cost, so the only reason to use these would seem to be if they
+    # improve performance.
+
+    # Results with default "mip_feasibility_tolerance". (Solver 'd')
+    # Without both: 10 => 7s, 30 => <6m, 50 => >11m (fractionals on 30 & 50, wrong cost on 50)
+    #    With both: 10 => 11s, 30 => 3m, 50 => 18m (fractionals and wrong cost on 30 & 50)
+
+    # Results with "mip_feasibility_tolerance=1e-9" to stop fractional result values. (Solver 'c')
+    # Without both: 10 => 48s, 30 => <6m, 50 => >25m, 100 => 52m23s (phantom loads on 30, 50, 100)
+    #    With both: 10 => 89s, 30 => <9m, 50 => >18m, 100 => 1h13m (no phantom loads)
+
+    # Uncomment the following lines to add constraints aimed at preventing inter-waypoint cycles:
+    # add_reverse_edge_constraint(prob, graph_data)  # stop phantom loads
+    # add_waypoint_single_outbound_constraint(prob, graph_data)  # stop phantom loads
+
+    # Don't use this as it adds complexity the solver doesn't like.
+    # The source load is calculated as the sum of its outbound loads per warehouse.
+    # Logically, it makes sense to use that as an upper bound constraint for waypoint
+    # LoadForWarehouse_ values, but then every time a supply node is enabled/disabled,
+    # all of the constraints for waypoint nodes that can carry a load for that warehouse
+    # change as well. I believe that makes the problem more stochastic than linear.
+
+    # NOTE: *** Tests with same as above along with waypoint clamp below. ***
+    # Results with default "mip_feasibility_tolerance".
+    # Without both: skipped testing this
+    #    With both: 10 => 9s, 30 => >8m, 50 => <24m (massive fractionals and wrong cost on 50 of 88)
+
+    # Results with "mip_feasibility_tolerance=1e-9" to stop fractional result values. (Solver 'c')
+    # Without both: skipped testing this
+    #    With both: 10 => <6s, 30 => <5m, 50 => 30m, 100 => 1h13m (no phantom loads)
+
+    # For the 200 max_cost the comparative result between with and without clamp by source @ 6h27m.
+    #           Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work
+    #        Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
+    #   w   106594    3679     42977  75.01%   225901133.5852  222071941.9115     1.72%     3140   1045  10168    50610k 23215.3s
+    #   w/o  83054    8794     30344  78.49%   229797003.0633  222142404.6765     3.45%     4611   1678   9882    27612k 23215.4s
+    #
+    # The w/o option stopped at 11h10m hours:
+    #       148626   15771     57904  81.81%   229059269.8077  222142404.6765     3.11%     5592   1613   9639    48973k 40236.1s
+
+    # Uncomment the following line to add constraints clamping waypoint loads by their source load:
+    # add_waypoint_clamp_by_source_constraints(prob, graph_data)
 
     return prob
 
 
-def main(max_cost=100, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
+def main(max_cost=50, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
     top_n: count of supply nodes per warehouse by value
     nearest_n: count of nearest warehouses available on waypoint nodes
@@ -299,7 +407,7 @@ def main(max_cost=100, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=
     prob = create_problem(graph_data, max_cost)
     prob.writeLP(f"last_{max_cost}.lp")
 
-    # This solution resulted in taking
+    mips_tol = 1e-6
     solver = pulp.HiGHS_CMD(
         path="/home/thell/.local/bin/highs",
         keepFiles=True,
@@ -309,16 +417,26 @@ def main(max_cost=100, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=
             "parallel=on",
             "threads=16",
             # "mip_heuristic_effort=1",
-            "mip_feasibility_tolerance=1e-9",
+            # testing the node/edge load indicator tolerance adjustment... put back to 1e-9 if needed
+            f"mip_feasibility_tolerance={mips_tol}",
+            f"primal_feasibility_tolerance={mips_tol}",
             "mip_improving_solution_save=on",
             f"mip_improving_solution_file=highs_improved_solution_{max_cost}_c.sol",
+            # f"solution_file=highs_solution_{max_cost}_c.sol",
         ],
     )
+
+    print()
+    print(
+        f"=== Solving: max_cost: {max_cost}, Lodging_bonus: {lodging_bonus} top_n: {top_n}, nearest_n: {nearest_n}, capacity={waypoint_capacity}"
+    )
+    print(f"Using threads=16 and mip_feasibility_tolerance={mips_tol}")
+    print()
+
     solver.solve(prob)
     ref_data = get_reference_data(lodging_bonus, top_n)
     print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=True)
 
-    # # This solution resulted in taking 19m with no fractional values. 51m and 100 with no fracts
     # solver = pulp.HiGHS_CMD(
     #     path="/home/thell/.local/bin/highs",
     #     keepFiles=True,
