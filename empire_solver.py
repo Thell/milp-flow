@@ -59,22 +59,26 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Edge, load_vars: 
     # Ensure has_load_var is 1 if load_var is non-zero and 0 if load_var is zero
 
     # Linking constraint to ensure TotalLoad is less than capacity.
-    prob += load_var <= obj.capacity * has_load_var, f"ClampLoadMax_{obj.name()}"
+    # prob += load_var <= obj.capacity * has_load_var, f"ClampLoadMax_{obj.name()}"
 
     # This works fine with primal_feasibility_tolerance=1e-9
     # prob += load_var <= 1e-5 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
 
     # Testing to see if 1e-6 on this _and_ the tolerance setting will work...
-    prob += load_var <= 1e-6 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
-    prob += load_var - (obj.capacity * has_load_var) <= 0, f"ForceZeroLoad_{obj.name()}"
+    # I still got fractional values doing this, the cost was correct on 30
+    # prob += load_var <= 1e-6 + (obj.capacity * has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
+    # prob += load_var - (obj.capacity * has_load_var) <= 0, f"ForceZeroLoad_{obj.name()}"
 
     # Ensure consistency between TotalLoad and HasLoad
-    prob += has_load_var <= load_var, f"LinkLoadHasLoad_{obj.name()}"
+    # prob += has_load_var <= load_var, f"LinkLoadHasLoad_{obj.name()}"
 
-    # eps = 0.0001
-    # M = obj.capacity + eps
-    # prob += load_var >= 0 + eps - M * (1 - has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
-    # prob += load_var <= 0 + M * has_load_var, f"ForceZeroLoad_{obj.name()}"
+    # This (with eps=0.0001) eliminated fractionals on max_cost=30.
+    # perhaps tie this to mip_feasability_tol if max_cost=100 reintroduces fractionals?
+    # 1e-5-> no fractionals.  50: 8m12s, 100: 37m both with phantom cycles but optimum results.
+    eps = 1e-5
+    M = obj.capacity + eps
+    prob += load_var >= 0 + eps - M * (1 - has_load_var), f"ZeroOrPositiveLoad_{obj.name()}"
+    prob += load_var <= 0 + M * has_load_var, f"ForceZeroLoad_{obj.name()}"
 
 
 def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
@@ -90,19 +94,12 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
                 f"{load_key}_at_{node.name()}",
                 lowBound=0,
                 upBound=node.capacity
-                # # TODO: Benchmark this on larger samples, I think it is superceded by ClampBySource
-                # # supply, origin and lodging nodes are load limited.
                 if node.type in [NodeType.supply, NodeType.origin, NodeType.lodging]
                 else LoadForWarehouse.capacity,
                 cat="Integer",
             )
             node.pulp_vars[load_key] = load_var
             warehouse_load_vars.append(load_var)
-
-            # if node.type in [NodeType.waypoint, NodeType.town]:
-            #     source_load = graph_data["nodes"]["source"].pulp_vars[load_key]
-            #     constraint_key = f"ClampBySource_{LoadForWarehouse.id}_at_{node.name()}"
-            #     prob += load_var <= source_load, constraint_key
 
         create_load_hasload_vars(prob, node, warehouse_load_vars)
 
@@ -130,11 +127,6 @@ def create_edge_vars(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int)
             )
             edge.pulp_vars[load_key] = load_var
             warehouse_load_vars.append(load_var)
-
-            # if edge.destination.type in [NodeType.waypoint, NodeType.town]:
-            #     source_load = graph_data["nodes"]["source"].pulp_vars[load_key]
-            #     constraint_key = f"ClampBySource_{LoadForWarehouse.id}_at_{edge.name()}"
-            #     prob += load_var <= source_load, constraint_key
 
         create_load_hasload_vars(prob, edge, warehouse_load_vars)
 
@@ -397,7 +389,7 @@ def create_problem(graph_data, max_cost):
     return prob
 
 
-def main(max_cost=50, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
+def main(max_cost=100, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
     top_n: count of supply nodes per warehouse by value
     nearest_n: count of nearest warehouses available on waypoint nodes
