@@ -18,7 +18,8 @@ arcs are subject to:
 WARNING: Solver integer tolerance is extremely important in this problem. Solvers _will_ use
 the tolerance to eliminate node costs which are calculated using the binary load indicators.
 With HiGHS the default of 1e-6 is not tight enough, using `mip_feasibility_tolerance=1e-9`
-results in proper binary assignments but takes much longer to solve.
+results in proper binary assignments but takes much longer to solve. Using a small epsilon
+and rounding the results improves performance while still obtaining proper results.
 """
 
 from pathlib import Path
