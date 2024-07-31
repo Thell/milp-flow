@@ -54,29 +54,10 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Arc, load_vars: L
     prob += load_var >= eps - M * (1 - has_load_var), f"ClampLoadMin_{obj.name()}"
     prob += load_var <= M * has_load_var, f"ClampLoadMax_{obj.name()}"
 
-    # where obj.type==Arc and source.type==waypoint and destination.type==waypoint
-    # let
-    #   y=LoadForWarehouse_{} of source
-    #   x=bLoadForWarehouse_{} binary load indicator on arc
-    #   z=LoadForWarehouse_{} of arc
-    #   M=LoadForWarehouse_{} capacity (from warehouse)
-    # then z=yx is => z<=xM; z>=0; z<=y; z>=y-(1-x)M
-    # or
-    #   LoadForWarehouse_{w.id}_on_{arc.id} <= bLoadForWarehouse_{w.id}_on_{arc.id} * Warehouse_{w.id}_capacity
-    #   LoadForWarehouse_{w.id}_on_{arc.id} <= LoadForWarehouse_{w.id}_at_{arc.source.id}
-    #   LoadForWarehouse_{w.id}_on_{arc.id} >= 0
-    #   LoadForWarehouse_{w.id}_on_{arc.id} >= LoadForWarehouse_{w.id}_at_{arc.source.id} - (1 - bLoadForWarehouse_{w.id}_on_{arc.id}) * Warehouse_{w.id}_capacity
-    #
-    # then for any given waypoint node its' LoadForWarehouse is
-    #   LoadForWarehouse = Sum(LoadForWarehouse_{w}_on_{arc.id} for arc in Node.inboundArcs)
-    # and its' HasLoad binary variable is
-    #   HasLoad>=0
-    #   HasLoad<=Sum(LoadForWarehouse_{w.id}_at_{node.id} for w in node.LoadForWarehouse)
-
 
 def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
-    """has_load and load vars for nodes.
-    `has_load`: binary indicator of a load.
+    """Create and add solver vars for nodes.
+    `HasLoad`: binary indicator of a load.
     `LoadForWarehouse_{warehouse}`: integer value of a destination bound load.
     """
     for node in graph_data["nodes"].values():
@@ -98,12 +79,12 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
 
 
 def create_arc_vars(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int):
-    """has_load and load vars for arcs.
-    `has_load` is a binary indicator of a load.
+    """Create and add solver vars for arcs.
+    `HasLoad` is a binary indicator of a load.
     `LoadForWarehouse_{warehouse}`: integer value of a destination bound load.
 
-    arcs can not transport a load the source doesn't send or a load the destination can't recieve.
     LoadForWarehouse is an intersection of the source and destination LoadForWarehouse lists.
+    Arcs can not transport a load the source doesn't send or a load the destination can't recieve.
     """
 
     for arc in graph_data["arcs"].values():
@@ -211,82 +192,6 @@ def add_source_to_sink_constraint(prob: pulp.LpProblem, graph_data: GraphData):
     )
 
 
-def add_reverse_arc_constraint(prob: pulp.LpProblem, graph_data: GraphData):
-    """Ensure reverse arcs on waypoint/town nodes don't return loads."""
-
-    # Only waypoint/town arcs have reverse arcs.
-    def is_transit_arc(arc):
-        return (arc.source.type in [NodeType.waypoint, NodeType.town]) and (
-            arc.destination.type in [NodeType.waypoint, NodeType.town]
-        )
-
-    seen_arcs = []
-    for arc in graph_data["arcs"].values():
-        if not is_transit_arc(arc):
-            continue
-
-        reverse_arc = graph_data["arcs"][(arc.destination.name(), arc.source.name())]
-        if arc.key in seen_arcs or reverse_arc.key in seen_arcs:
-            continue
-        seen_arcs.append(arc.key)
-        seen_arcs.append(reverse_arc.key)
-
-        shared_keys = list(set(arc.pulp_vars.keys()).intersection(reverse_arc.pulp_vars.keys()))
-        for var_key in shared_keys:
-            if var_key.startswith("LoadForWarehouse"):
-                # Forward load indicator.
-                b_forward = pulp.LpVariable(f"b{var_key}_on_{arc.name()}", cat="Binary")
-                arc.pulp_vars[f"b{var_key}"] = b_forward
-                prob += (
-                    arc.pulp_vars[var_key] <= arc.destination.capacity * b_forward,
-                    f"Linkb{var_key}_on_{arc.name()}",
-                )
-
-                # Reverse load indicator.
-                b_reverse = pulp.LpVariable(f"b{var_key}_on_{reverse_arc.name()}", cat="Binary")
-                reverse_arc.pulp_vars[f"b{var_key}"] = b_reverse
-                prob += (
-                    reverse_arc.pulp_vars[var_key] <= arc.source.capacity * b_reverse,
-                    f"Linkb{var_key}_on_{reverse_arc.name()}",
-                )
-
-                # Mutual exclusion.
-                prob += (
-                    b_forward + b_reverse <= 1,
-                    f"MutualExclusion{var_key}_{arc.name()}_{reverse_arc.name()}",
-                )
-
-
-def add_waypoint_single_outbound_constraint(prob: pulp.LpProblem, graph_data: GraphData):
-    """Ensure transit nodes do not split a load to multiple outbound arcs.
-    NOTE: do not call this prior to calling add_reverse_arc_constraint() because
-    transit arcs have the binary indicators added in add_reverse_arc_constraint().
-    The binary indicators are in the arc's pulp_vars keyed with `bLoadForWarehouse_{}`
-    """
-
-    def is_transit_arc(arc):
-        return (arc.source.type in [NodeType.waypoint, NodeType.town]) and (
-            arc.destination.type in [NodeType.waypoint, NodeType.town]
-        )
-
-    for node in graph_data["nodes"].values():
-        if node.type not in [NodeType.waypoint, NodeType.town]:
-            continue
-
-        outbound_indicator_vars = {}
-        for arc in node.outbound_arcs:
-            if is_transit_arc(arc):
-                for key, var in arc.pulp_vars.items():
-                    if key.startswith("bLoadForWarehouse_"):
-                        if key not in outbound_indicator_vars:
-                            outbound_indicator_vars[key] = []
-                        outbound_indicator_vars[key].append(var)
-
-        for vars in outbound_indicator_vars.values():
-            if len(vars) > 1:
-                prob += pulp.lpSum(vars) <= 1
-
-
 def create_problem(graph_data, max_cost):
     """Create the problem and add the varaibles and constraints."""
     prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
@@ -305,45 +210,10 @@ def create_problem(graph_data, max_cost):
     add_warehouse_to_lodging_constraints(prob, graph_data)
     add_source_to_sink_constraint(prob, graph_data)
 
-    # NOTE: Solutions without these are optimum value within cost constraint but in the transit
-    # (waypoint/town) nodes unnecessary loads that don't contribute to the optimal solution are
-    # being added because there isn't a constraint to stop inter-waypoint cycles.
-
-    # The below constraints ensure no direct A <-> B cycles and limit outbound routes. They still
-    # wouldn't specifically stop A -> B -> C -> A pantom cycles and the only thing that would stop
-    # that is linking the capacity to the dynamic source load for each transit node which creates
-    # a more stochastic problem that hinders solving efficiently.
-    # These cycles only exist on nodes that already have a load incurring a cost, so the only reason
-    # to use these is result validation of route cost minimization or to improve performance.
-
-    # Results with default mip_feasibility_tolerance and load/has_load link with epsilon 1e-5.
-    # without both: 10 => 4.5s, 30 => 4m48s, 50 =>  8m02s, 100 => 37m03s (phantoms: 50, 100)
-    # with reverse: 10 => 7.9s, 30 => 3m04s, 50 => 18m16s, 100 => 74m25s (phantoms: 50)
-    #  with single: 10 => 4.4s, 30 => 4m41s, 50 =>  8m04s, 100 => 37m22s (phantoms: 50, 100)
-    #    with both: 10 => 5.3s, 30 => 8m38s, 50 =>  9m25s, 100 => 44m55s (no phantoms)
-    #
-    # Revised mcXXX_lb1_tn2_nn4_wc15_eps (rounding results) Heuristics=.5 Tol=1e-6
-    # without both: 10 => 4.6s, 30 => 4m48s, 50 =>  5m07s, 100 => 28m15s, 200 => Term @ 9hr
-    #
-    # Time constraint max_cost=200 tests:
-    #                    Nodes      |    B&B Tree     |            Objective Bounds              |  Dynamic Constraints |       Work
-    #                 Proc. InQueue |  Leaves   Expl. | BestBound       BestSol              Gap |   Cuts   InLp Confl. | LpIters     Time
-    # without both: (completed with fractionals - cost and value correct if round(v["value"]) is used)
-    # improvement L   81867    4316     29858  44.58%   230220574.5478  222220439.3912     3.60%     1892   1096   9920    30632k 13970.5s
-    #             T  143839    5983     54759  60.74%   228390723.635   222220439.4249     2.78%      948    911   4540    43144k 19885.5s
-    # completed =>   187120       8     78506  99.99%   223731390.2573  222220439.4249     0.68%     2206   1104   9948    67924k 29567.6s
-    #    with both:
-    # improvement =>  26505    1688      7076  56.65%   232322232.2251  222142404.6765     4.58%     4724   1421   9123     9946k  8687.4s
-    # termination => 148626   15771     57904  81.81%   229059269.8077  222142404.6765     3.11%     5592   1613   9639    48973k 40236.1s
-
-    # Uncomment the following lines to add constraints aimed at preventing inter-waypoint cycles:
-    # add_reverse_arc_constraint(prob, graph_data)
-    # add_waypoint_single_outbound_constraint(prob, graph_data)
-
     return prob
 
 
-def main(max_cost=300, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
+def main(max_cost=10, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
     top_n: count of supply nodes per warehouse by value (index based, zero=1)
     nearest_n: count of nearest warehouses available on waypoint nodes (index based, zero=1)
@@ -352,9 +222,15 @@ def main(max_cost=300, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=
     graph_data: GraphData = generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity)
     prob = create_problem(graph_data, max_cost)
 
-    prefix = "RoundingResults"
-    suffix = "eps"
-    filename = f"{prefix}_mc{max_cost}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_capacity}_{suffix}"
+    prefix = ""
+    suffix = ""
+
+    if prefix:
+        prefix = f"{prefix}_"
+    if suffix:
+        suffix = f"_{suffix}"
+
+    filename = f"{prefix}mc{max_cost}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_capacity}{suffix}"
     outfile_path = "/home/thell/milp-flow/highs_output"
 
     prob.writeLP(f"{outfile_path}/models/{filename}.lp")
