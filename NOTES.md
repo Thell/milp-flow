@@ -53,7 +53,7 @@ By 'flipping' I mean to consider the Node Empire like this...
 * Chosen Supply nodes - nodes representing each production node.
 * Unused Supply nodes - representing unassigned production nodes.
 * Network nodes (waypoints) - nodes representing the connection network.
-* Demand Aggregation nodes (Town Nodes) - nodes that are part of the Network nodes and have edges
+* Demand Aggregation nodes (Town Nodes) - nodes that are part of the Network nodes and have arcs
   leading out of the connection network to Demand Nodes.
 * Demand nodes - representing the workers of each town.
 * Unused Demand nodes - representing unassigned production nodes.

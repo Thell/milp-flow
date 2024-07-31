@@ -1,5 +1,5 @@
 """Empire Data Generation
-Generate the edges and nodes used for MILP optimized node empire solver.
+Generate the arcs and nodes used for MILP optimized node empire solver.
 """
 
 from __future__ import annotations
@@ -13,12 +13,12 @@ from file_utils import read_workerman_json, read_user_json, write_user_json
 
 class GraphData(TypedDict):
     nodes: Dict[str, Node]
-    edges: Dict[tuple[str, str], Edge]
+    arcs: Dict[tuple[str, str], Arc]
     warehouse_nodes: Dict[str, Node]
 
 
 class NodeType(IntEnum):
-    # Control - use all warehouses in LoadForWarehouse from edge.destination
+    # Control - use all warehouses in LoadForWarehouse from arc.destination
     source = auto()
     # Bottleneck - use since warehouse in LoadForWarehouse
     supply = auto()
@@ -29,7 +29,7 @@ class NodeType(IntEnum):
     # Bottleneck - use single warehouse in LoadForWarehouse
     warehouse = auto()
     lodging = auto()
-    # Control - use all warehouses in LoadForWarehouse from edge.source
+    # Control - use all warehouses in LoadForWarehouse from arc.source
     sink = auto()
 
     INVALID = auto()
@@ -61,8 +61,8 @@ class Node:
         self.value = value
         self.LoadForWarehouse = LoadForWarehouse if LoadForWarehouse else []
         self.key = self.name()
-        self.inbound_edges: List[Edge] = []
-        self.outbound_edges: List[Edge] = []
+        self.inbound_arcs: List[Arc] = []
+        self.outbound_arcs: List[Arc] = []
         self.pulp_vars = {}
 
     def name(self) -> str:
@@ -81,8 +81,8 @@ class Node:
             "cost": self.cost,
             "value": self.value,
             "LoadForWarehouse": [],
-            "inbound_edges": [edge.key for edge in self.inbound_edges],
-            "outbound_edges": [edge.key for edge in self.outbound_edges],
+            "inbound_arcs": [arc.key for arc in self.inbound_arcs],
+            "outbound_arcs": [arc.key for arc in self.outbound_arcs],
         }
         for node in self.LoadForWarehouse:
             if node is self:
@@ -101,7 +101,7 @@ class Node:
         return hash((self.name()))
 
 
-class Edge:
+class Arc:
     def __init__(self, source: Node, destination: Node, capacity: int, cost: int = 0):
         self.source = source
         self.destination = destination
@@ -128,7 +128,7 @@ class Edge:
         return f"{self.source.name()}_to_{self.destination.name()}"
 
     def __repr__(self) -> str:
-        return f"Edge({self.source.name()} -> {self.destination.name()}, capacity: {self.capacity})"
+        return f"arc({self.source.name()} -> {self.destination.name()}, capacity: {self.capacity})"
 
     def __eq__(self, other) -> bool:
         return (self.source, self.destination) == (other.source, other.destination)
@@ -137,36 +137,36 @@ class Edge:
         return hash((self.source.name() + self.destination.name()))
 
 
-def add_edges(nodes: Dict[str, Node], edges: Dict[tuple, Edge], node_a: Node, node_b: Node):
-    """Add edges between a and b.
+def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_b: Node):
+    """Add arcs between a and b.
 
-    Edge Types:
+    arc Types:
     - Source to Origin:
-        Edge(source -> origin, capacity: 1)
+        arc(source -> origin, capacity: 1)
 
     - Waypoint Origins:
-        Edge(origin -> waypoint, capacity: 1)
-        Edge(origin -> town, capacity: 1)
+        arc(origin -> waypoint, capacity: 1)
+        arc(origin -> town, capacity: 1)
 
     - Waypoint Interconnects:
-        Edge(waypoint <-> waypoint, capacity: max_capacity)
-        Edge(waypoint <-> town, capacity: max_capacity)
-        Edge(town <-> town, capacity: max_capacity)
+        arc(waypoint <-> waypoint, capacity: max_capacity)
+        arc(waypoint <-> town, capacity: max_capacity)
+        arc(town <-> town, capacity: max_capacity)
 
     - Waypoint Exits:
-        Edge(town -> warehouse, capacity: warehouse_max_capacity)
+        arc(town -> warehouse, capacity: warehouse_max_capacity)
 
     - Town to Warehouse:
-        Edge(warehouse -> warehouse, capacity: equal to capacity of destination warehouse
+        arc(warehouse -> warehouse, capacity: equal to capacity of destination warehouse
 
     - Warehouse to Sink:
-        Edge(warehouse -> sink, cap: equal to capacity of source warehouse
+        arc(warehouse -> sink, cap: equal to capacity of source warehouse
     """
-    # A safety measure to ensure edge direction.
+    # A safety measure to ensure arc direction.
     if node_a.type > node_b.type:
         node_a, node_b = node_b, node_a
 
-    edge_configurations = {
+    arc_configurations = {
         (NodeType.source, NodeType.supply): (1, 0),
         (NodeType.supply, NodeType.origin): (1, 0),
         (NodeType.origin, NodeType.waypoint): (1, 0),
@@ -179,22 +179,22 @@ def add_edges(nodes: Dict[str, Node], edges: Dict[tuple, Edge], node_a: Node, no
         (NodeType.lodging, NodeType.sink): (node_a.capacity, 0),
     }
 
-    capacity, reverse_capacity = edge_configurations.get((node_a.type, node_b.type), (1, 0))
+    capacity, reverse_capacity = arc_configurations.get((node_a.type, node_b.type), (1, 0))
 
-    edge_a = Edge(node_a, node_b, capacity=capacity)
-    edge_b = Edge(node_b, node_a, capacity=reverse_capacity)
+    arc_a = Arc(node_a, node_b, capacity=capacity)
+    arc_b = Arc(node_b, node_a, capacity=reverse_capacity)
 
-    for edge in [edge_a, edge_b]:
-        if edge.key not in edges and edge.capacity > 0:
-            edges[edge.key] = edge
-            nodes[edge.source.key].outbound_edges.append(edge)
-            nodes[edge.destination.key].inbound_edges.append(edge)
+    for arc in [arc_a, arc_b]:
+        if arc.key not in arcs and arc.capacity > 0:
+            arcs[arc.key] = arc
+            nodes[arc.source.key].outbound_arcs.append(arc)
+            nodes[arc.destination.key].inbound_arcs.append(arc)
 
-            if edge.destination.type is NodeType.origin:
-                assert len(edge.source.LoadForWarehouse) == 1, "LoadForWarehouse count mismatch."
-                edge.destination.LoadForWarehouse.extend(edge.source.LoadForWarehouse)
-            elif edge.destination.type is NodeType.lodging:
-                edge.destination.LoadForWarehouse = [edge.source]
+            if arc.destination.type is NodeType.origin:
+                assert len(arc.source.LoadForWarehouse) == 1, "LoadForWarehouse count mismatch."
+                arc.destination.LoadForWarehouse.extend(arc.source.LoadForWarehouse)
+            elif arc.destination.type is NodeType.lodging:
+                arc.destination.LoadForWarehouse = [arc.source]
 
 
 def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
@@ -220,7 +220,7 @@ def get_link_nodes(nodes, link, ref_data):
         # Not used in the graph because they are beyond the scope of the optimization.
         return (None, None)
 
-    # Ensure edge node order.
+    # Ensure arc node order.
     if node_a_type > node_b_type:
         node_a_id, node_b_id = node_b_id, node_a_id
         node_a_type, node_b_type = node_b_type, node_a_type
@@ -258,7 +258,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             capacity = 1
             cost = 0
             LoadForWarehouse = [warehouse]
-            value = ref_data["origin_values"][origin.id][warehouse.id]["value"]
+            value = round(ref_data["origin_values"][origin.id][warehouse.id]["value"], 4)
         case NodeType.origin:
             capacity = 1
             cost = ref_data["waypoint_data"][node_id]["CP"]
@@ -346,47 +346,43 @@ def print_sample_nodes(graph_data: GraphData, detailed: bool = False):
             print()
 
 
-def print_sample_edges(graph_data: GraphData, detailed: bool = False):
-    """Print sample edges."""
-    seen_edge_prefixes = set()
-    for _, edge in graph_data["edges"].items():
-        prefix_pair = (edge.source.type.value, edge.destination.type.value)
-        if prefix_pair in seen_edge_prefixes:
+def print_sample_arcs(graph_data: GraphData, detailed: bool = False):
+    """Print sample arcs."""
+    seen_arc_prefixes = set()
+    for _, arc in graph_data["arcs"].items():
+        prefix_pair = (arc.source.type.value, arc.destination.type.value)
+        if prefix_pair in seen_arc_prefixes:
             continue
-        seen_edge_prefixes.add(prefix_pair)
-        print(edge)
-        if (
-            detailed
-            and edge.source.type != NodeType.source
-            and edge.destination.type != NodeType.sink
-        ):
-            print(edge.as_dict())
+        seen_arc_prefixes.add(prefix_pair)
+        print(arc)
+        if detailed and arc.source.type != NodeType.source and arc.destination.type != NodeType.sink:
+            print(arc.as_dict())
             print()
 
 
-def process_links(nodes: Dict[str, Node], edges: Dict[tuple, Edge], ref_data: Dict[str, Any]):
-    """Process all waypoint links and add the nodes and edges to the graph.
+def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict[str, Any]):
+    """Process all waypoint links and add the nodes and arcs to the graph.
 
     Calls handlers for origin and town nodes to add origin value nodes and
-    warehouse/lodging nodes with their respective source and sink edges.
+    warehouse/lodging nodes with their respective source and sink arcs.
     """
     for link in ref_data["waypoint_links"]:
         source, destination = get_link_nodes(nodes, link, ref_data)
         if source is None or destination is None:
             continue
 
-        add_edges(nodes, edges, source, destination)
+        add_arcs(nodes, arcs, source, destination)
 
         if source.type == NodeType.origin:
-            process_origin(nodes, edges, source, ref_data)
+            process_origin(nodes, arcs, source, ref_data)
         if destination.type == NodeType.town:
-            process_town(nodes, edges, destination, ref_data)
+            process_town(nodes, arcs, destination, ref_data)
 
 
 def process_origin(
-    nodes: Dict[str, Node], edges: Dict[tuple, Edge], origin: Node, ref_data: Dict[str, Any]
+    nodes: Dict[str, Node], arcs: Dict[tuple, Arc], origin: Node, ref_data: Dict[str, Any]
 ):
-    """Add origin supply value nodes and edges between the source and origin nodes."""
+    """Add origin supply value nodes and arcs between the source and origin nodes."""
     for i, (warehouse_id, value_data) in enumerate(ref_data["origin_values"][origin.id].items()):
         if i > ref_data["top_n_origin_values"]:
             return
@@ -402,14 +398,14 @@ def process_origin(
             origin=origin,
             warehouse=warehouse,
         )
-        add_edges(nodes, edges, nodes["source"], supply_node)
-        add_edges(nodes, edges, supply_node, origin)
+        add_arcs(nodes, arcs, nodes["source"], supply_node)
+        add_arcs(nodes, arcs, supply_node, origin)
 
 
 def process_town(
-    nodes: Dict[str, Node], edges: Dict[tuple, Edge], town: Node, ref_data: Dict[str, Any]
+    nodes: Dict[str, Node], arcs: Dict[tuple, Arc], town: Node, ref_data: Dict[str, Any]
 ):
-    """Add town warehouse and lodging nodes and edges between the town and sink nodes."""
+    """Add town warehouse and lodging nodes and arcs between the town and sink nodes."""
     warehouse_id = ref_data["town_to_warehouse"][town.id]
     lodging_data = ref_data["lodging_data"][warehouse_id]
     lodging_bonus = ref_data["lodging_bonus"]
@@ -418,7 +414,7 @@ def process_town(
     warehouse_node = get_node(
         nodes, warehouse_id, NodeType.warehouse, ref_data, capacity=max_capacity
     )
-    add_edges(nodes, edges, town, warehouse_node)
+    add_arcs(nodes, arcs, town, warehouse_node)
 
     min_capacity = 0
     for capacity, lodging_data in lodging_data.items():
@@ -436,8 +432,8 @@ def process_town(
             warehouse=warehouse_node,
         )
         min_capacity = max_capacity + 1
-        add_edges(nodes, edges, warehouse_node, lodging_node)
-        add_edges(nodes, edges, lodging_node, nodes["sink"])
+        add_arcs(nodes, arcs, warehouse_node, lodging_node)
+        add_arcs(nodes, arcs, lodging_node, nodes["sink"])
 
 
 def nearest_n_warehouses(ref_data: Dict[str, Any], graph_data: GraphData, nearest_n: int):
@@ -445,11 +441,11 @@ def nearest_n_warehouses(ref_data: Dict[str, Any], graph_data: GraphData, neares
     for node in graph_data["nodes"].values():
         waypoint_graph.add_node(node.id, type=node.type)
 
-    for edge in graph_data["edges"].values():
-        weight = edge.destination.cost
-        if "1727" in edge.name():
+    for arc in graph_data["arcs"].values():
+        weight = arc.destination.cost
+        if "1727" in arc.name():
             weight = 999999
-        waypoint_graph.add_edge(edge.source.id, edge.destination.id, weight=weight)
+        waypoint_graph.add_edge(arc.source.id, arc.destination.id, weight=weight)
 
     all_pairs = dict(nx.all_pairs_bellman_ford_path_length(waypoint_graph, weight="weight"))
 
@@ -473,24 +469,24 @@ def contract_graph(graph_data: GraphData):
 
 
 def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
-    """Generate and return a Dict of Node and Edge objects composing the empire data."""
+    """Generate and return a Dict of Node and arc objects composing the empire data."""
 
-    edges: Dict[tuple[str, str], Edge] = {}
+    arcs: Dict[tuple[str, str], Arc] = {}
     nodes: Dict[str, Node] = {}
     ref_data = get_reference_data(lodging_bonus, top_n)
     ref_data["waypoint_capacity"] = waypoint_capacity
 
     get_node(nodes, "source", NodeType.source, ref_data)
     get_node(nodes, "sink", NodeType.sink, ref_data)
-    process_links(nodes, edges, ref_data)
+    process_links(nodes, arcs, ref_data)
 
     nodes_dict = dict(sorted(nodes.items(), key=lambda item: item[1].type))
-    edges_dict = dict(sorted(edges.items(), key=lambda item: item[1].as_dict()["type"]))
+    arcs_dict = dict(sorted(arcs.items(), key=lambda item: item[1].as_dict()["type"]))
     warehouse_nodes = {k: v for k, v in nodes_dict.items() if v.type == NodeType.warehouse}
 
     graph_data: GraphData = {
         "nodes": nodes_dict,
-        "edges": edges_dict,
+        "arcs": arcs_dict,
         "warehouse_nodes": warehouse_nodes,
     }
 
@@ -512,12 +508,12 @@ def main(write=True):
     graph_data = generate_empire_data(lodging_bonus=4, top_n=2, nearest_n=5, waypoint_capacity=50)
 
     print_sample_nodes(graph_data, detailed=True)
-    print_sample_edges(graph_data, detailed=False)
-    print(f"Num edges: {len(graph_data["edges"])}, Num nodes: {len(graph_data["nodes"])}")
+    print_sample_arcs(graph_data, detailed=False)
+    print(f"Num arcs: {len(graph_data["arcs"])}, Num nodes: {len(graph_data["nodes"])}")
 
     if write:
         data = {
-            "edges": [edge.as_dict() for _, edge in graph_data["edges"].items()],
+            "arcs": [arc.as_dict() for _, arc in graph_data["arcs"].items()],
             "nodes": [node.as_dict() for _, node in graph_data["nodes"].items()],
         }
 
