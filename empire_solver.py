@@ -8,12 +8,7 @@ The model is based on flow where source outbound load == sink inbound load per s
 * All arcs and nodes have a load per supply warehouse equal to the sum of the inbound/source loads.
 * All arcs and nodes loads must be <= source supply. This is more robust for result verification
   but requires more time. Using the max warehouse load as the load limit works as well.
-
-Nodes are subject to:
-  - inbound == outbound
-  - single outbound arc per load
-arcs are subject to:
-  - arc and reverse arc load mutual exclusivity
+* All nodes are subject to inbound == outbound.
 
 WARNING: Solver integer tolerance is extremely important in this problem. Solvers _will_ use
 the tolerance to eliminate node costs which are calculated using the binary load indicators.
