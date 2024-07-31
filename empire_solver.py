@@ -49,7 +49,7 @@ def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Arc, load_vars: L
     has_load_var = pulp.LpVariable(f"HasLoad_{obj.name()}", cat="Binary")
     obj.pulp_vars["HasLoad"] = has_load_var
 
-    # Usage of epsilon ensures reduces impact of fractionals; improves HiGHS performance.
+    # Usage of epsilon reduces impact of fractionals; improves HiGHS performance.
     eps = 1e-5
     M = obj.capacity + eps
     prob += load_var >= eps - M * (1 - has_load_var), f"ClampLoadMin_{obj.name()}"
