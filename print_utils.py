@@ -120,7 +120,7 @@ def print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, deta
                 arc = graph_data["arcs"].get(arc_key, None)
                 outputs.append(f"{arc}, {v}")
                 if arc.source.type is NodeType.waypoint or arc.destination.type is NodeType.waypoint:
-                    arc_loads.append(v["value"])
+                    arc_loads.append((arc, v["value"]))
             else:
                 # A node
                 node = graph_data["nodes"].get(kname, None)
@@ -153,7 +153,7 @@ def print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, deta
     print()
     print("    Num origin nodes:", len([x for x in outputs if x.startswith("Node(name: origin_")]))
     print("   Max waypoint load:", max(waypoint_loads, key=itemgetter(1)))
-    print("       Max arc load:", max(arc_loads))
+    print("       Max arc load:", max(arc_loads, key=itemgetter(1)))
     print()
     if gt0lt1_vars:
         print("WARNING: 0 < x < 1 vars count:", len(gt0lt1_vars))
