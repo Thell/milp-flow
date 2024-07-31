@@ -4,3 +4,4 @@ __pycache__/
 highs_output/
 MaximizeEmpireValue-pulp.HiGHS
 MaximizeEmpireValue-pulp.mps
+MaximizeEmpireValue-pulp.sol
