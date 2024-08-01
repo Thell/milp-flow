@@ -64,9 +64,9 @@ def create_node_vars(prob: pulp.LpProblem, graph_data: GraphData):
                 f"{load_key}_at_{node.name()}",
                 lowBound=0,
                 upBound=node.capacity
-                if node.type in [NodeType.supply, NodeType.origin, NodeType.lodging]
+                if node.type in [NodeType.origin, NodeType.lodging]
                 else LoadForWarehouse.capacity,
-                cat="Integer",
+                cat="Binary" if node.type is NodeType.origin else "Integer",
             )
             node.pulp_vars[load_key] = load_var
             warehouse_load_vars.append(load_var)
@@ -93,7 +93,7 @@ def create_arc_vars(prob: pulp.LpProblem, graph_data: GraphData, max_cost: int):
                 f"{load_key}_on_{arc.name()}",
                 lowBound=0,
                 upBound=arc.capacity,
-                cat="Integer",
+                cat="Binary" if arc.source.type is NodeType.source else "Integer",
             )
             arc.pulp_vars[load_key] = load_var
             warehouse_load_vars.append(load_var)
@@ -109,14 +109,13 @@ def link_node_and_arc_vars(prob: pulp.LpProblem, graph_data: GraphData):
 
     def get_arc_vars(node: Node, node_var_key: str, arcs: List[Arc]) -> List[pulp.LpVariable]:
         """Get the relevant arc variables for a given node and key."""
-        is_source = node.type is NodeType.source
         arc_vars = []
         for arc in arcs:
             for key, var in arc.pulp_vars.items():
                 if key.startswith("LoadForWarehouse_") and (
                     key == node_var_key or node.type is NodeType.lodging
                 ):
-                    arc_vars.append(arc.pulp_vars["HasLoad"] if is_source else var)
+                    arc_vars.append(var)
         return arc_vars
 
     def link_node_to_arcs(prob: pulp.LpProblem, node: Node, direction: str, arcs: List[Arc]):
@@ -139,9 +138,11 @@ def create_value_var(prob: pulp.LpProblem, graph_data: GraphData):
     prob += (
         value_var
         == pulp.lpSum(
-            node.value * node.pulp_vars["HasLoad"]
+            node.warehouse_values[warehouse.id]["value"]
+            * node.pulp_vars[f"LoadForWarehouse_{warehouse.id}"]
             for node in graph_data["nodes"].values()
-            if node.type is NodeType.supply
+            for warehouse in node.LoadForWarehouse
+            if node.type is NodeType.origin
         ),
         "TotalValue",
     )
@@ -209,7 +210,7 @@ def create_problem(graph_data, max_cost):
     return prob
 
 
-def main(max_cost=10, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
+def main(max_cost=400, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
     top_n: count of supply nodes per warehouse by value (index based, zero=1)
     nearest_n: count of nearest warehouses available on waypoint nodes (index based, zero=1)
@@ -218,8 +219,10 @@ def main(max_cost=10, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=1
     graph_data: GraphData = generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity)
     prob = create_problem(graph_data, max_cost)
 
-    prefix = ""
-    suffix = ""
+    prefix = "RemoveSupply"
+    suffix = "no_gap"
+    mips_tol = 1e-6
+    mips_gap = max_cost / 10_000
 
     if prefix:
         prefix = f"{prefix}_"
@@ -231,8 +234,6 @@ def main(max_cost=10, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=1
 
     prob.writeLP(f"{outfile_path}/models/{filename}.lp")
 
-    mips_tol = 1e-6
-    mips_gap = 0.025
     solver = pulp.HiGHS_CMD(
         path="/home/thell/.local/bin/highs",
         keepFiles=True,
@@ -254,7 +255,7 @@ def main(max_cost=10, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=1
     print(
         f"=== Solving: max_cost: {max_cost}, Lodging_bonus: {lodging_bonus} top_n: {top_n},"
         f" nearest_n: {nearest_n}, capacity={waypoint_capacity}"
-        f"\nUsing threads=16 and mip_feasibility_tolerance={mips_tol}"
+        f"\nUsing threads=16 and mip_feasibility_tolerance={mips_tol}, gap: {mips_gap}"
     )
     print()
 

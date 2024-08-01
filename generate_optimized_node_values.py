@@ -292,12 +292,12 @@ def generate_full_data():
     for town in DISTANCES_TK2PZK.keys():
         if town in ["1375"]:
             continue
-        # if str(town) not in output:
-        #     output[str(town)] = {}
 
-        median_giant = medianGiant(town)
-        median_goblin = medianGoblin(town)
-        median_human = medianHuman(town)
+        median_workers = {
+            "giant": medianGiant(town),
+            "goblin": medianGoblin(town),
+            "human": medianHuman(town),
+        }
 
         for data in DISTANCES_TK2PZK[town]:
             plantzone, dist = data
@@ -307,9 +307,9 @@ def generate_full_data():
                 continue
 
             optimized_workers = {
-                "giant": optimize_skills(town, plantzone, dist, median_giant),
-                "goblin": optimize_skills(town, plantzone, dist, median_goblin),
-                "human": optimize_skills(town, plantzone, dist, median_human),
+                "giant": optimize_skills(town, plantzone, dist, median_workers["giant"]),
+                "goblin": optimize_skills(town, plantzone, dist, median_workers["goblin"]),
+                "human": optimize_skills(town, plantzone, dist, median_workers["human"]),
             }
             optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
 
@@ -317,8 +317,13 @@ def generate_full_data():
                 output[str(plantzone)] = {}
             output[str(plantzone)][str(town)] = {}
             output[str(plantzone)][str(town)]["worker"] = optimized_worker[0]
-            output[str(plantzone)][str(town)]["skills"] = optimized_worker[1]["skills"]
             output[str(plantzone)][str(town)]["value"] = optimized_worker[1]["profit"]
+            output[str(plantzone)][str(town)]["worker_data"] = median_workers[
+                optimized_worker[0]
+            ].copy()
+            output[str(plantzone)][str(town)]["worker_data"]["skills"] = [
+                int(s) for s in optimized_worker[1]["skills"].copy()
+            ]
 
     for plantzone, warehouse_data in output.copy().items():
         output[plantzone] = dict(

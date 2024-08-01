@@ -21,7 +21,7 @@ class NodeType(IntEnum):
     # Control - use all warehouses in LoadForWarehouse from arc.destination
     source = auto()
     # Bottleneck - use since warehouse in LoadForWarehouse
-    supply = auto()
+    # supply = auto()
     origin = auto()
     # Transit - use nearest_n warehouses in LoadForWarehouse
     waypoint = auto()
@@ -36,7 +36,7 @@ class NodeType(IntEnum):
 
     def is_node_capacity_type(self):
         """These types of nodes have a different capcity than the LoadForWarehouse node."""
-        return self in [NodeType.supply, NodeType.origin, NodeType.lodging]
+        return self in [NodeType.origin, NodeType.lodging]
 
     def __repr__(self):
         return self.name
@@ -50,7 +50,6 @@ class Node:
         capacity: int,
         min_capacity: int = 0,
         cost: int = 0,
-        value: int = 0,
         LoadForWarehouse: List[Node] = [],
     ):
         self.id = id
@@ -58,7 +57,7 @@ class Node:
         self.capacity = capacity
         self.min_capacity = min_capacity
         self.cost = cost
-        self.value = value
+        self.warehouse_values: Dict[str, Dict[str, Any]] = {}
         self.LoadForWarehouse = LoadForWarehouse if LoadForWarehouse else []
         self.key = self.name()
         self.inbound_arcs: List[Arc] = []
@@ -79,7 +78,7 @@ class Node:
             "capacity": self.capacity,
             "min_capacity": self.capacity,
             "cost": self.cost,
-            "value": self.value,
+            "warehouse_values": self.warehouse_values,
             "LoadForWarehouse": [],
             "inbound_arcs": [arc.key for arc in self.inbound_arcs],
             "outbound_arcs": [arc.key for arc in self.outbound_arcs],
@@ -92,7 +91,7 @@ class Node:
         return obj_dict
 
     def __repr__(self) -> str:
-        return f"Node(name: {self.name()}, capacity: {self.capacity}, min_capacity: {self.min_capacity}, cost: {self.cost}, value: {self.value})"
+        return f"Node(name: {self.name()}, capacity: {self.capacity}, min_capacity: {self.min_capacity}, cost: {self.cost}, value: {self.warehouse_values})"
 
     def __eq__(self, other) -> bool:
         return self.name() == other.name()
@@ -167,8 +166,7 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
         node_a, node_b = node_b, node_a
 
     arc_configurations = {
-        (NodeType.source, NodeType.supply): (1, 0),
-        (NodeType.supply, NodeType.origin): (1, 0),
+        (NodeType.source, NodeType.origin): (1, 0),
         (NodeType.origin, NodeType.waypoint): (1, 0),
         (NodeType.origin, NodeType.town): (1, 0),
         (NodeType.waypoint, NodeType.waypoint): (node_b.capacity, node_a.capacity),
@@ -190,10 +188,7 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
             nodes[arc.source.key].outbound_arcs.append(arc)
             nodes[arc.destination.key].inbound_arcs.append(arc)
 
-            if arc.destination.type is NodeType.origin:
-                assert len(arc.source.LoadForWarehouse) == 1, "LoadForWarehouse count mismatch."
-                arc.destination.LoadForWarehouse.extend(arc.source.LoadForWarehouse)
-            elif arc.destination.type is NodeType.lodging:
+            if arc.destination.type is NodeType.lodging:
                 arc.destination.LoadForWarehouse = [arc.source]
 
 
@@ -247,31 +242,15 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
         case NodeType.source:
             capacity = ref_data["max_capacity"]
             cost = 0
-            value = 0
-        case NodeType.supply:
-            origin = kwargs.get("origin")
-            warehouse = kwargs.get("warehouse")
-            assert warehouse and origin, "supply nodes require 'warehouse' and 'origin' kwargs."
-            isinstance(origin, Node)
-            isinstance(warehouse, Node)
-            node_id = f"{origin.key}_for_{warehouse.key}"
-            capacity = 1
-            cost = 0
-            LoadForWarehouse = [warehouse]
-            value = round(ref_data["origin_values"][origin.id][warehouse.id]["value"], 4)
         case NodeType.origin:
             capacity = 1
             cost = ref_data["waypoint_data"][node_id]["CP"]
-            value = 0
         case NodeType.waypoint | NodeType.town:
             capacity = ref_data["waypoint_capacity"]
             cost = ref_data["waypoint_data"][node_id]["CP"]
-            value = 0
         case NodeType.warehouse:
             capacity = ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
             cost = 0
-            value = 0
-            # MARK
             LoadForWarehouse = []
         case NodeType.lodging:
             capacity = kwargs.get("capacity")
@@ -281,18 +260,15 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             assert (
                 capacity and (min_capacity is not None) and (cost is not None) and warehouse
             ), "Lodging nodes require 'capacity', 'min_capacity' 'cost' and 'warehouse' kwargs."
-            value = 0
-            # MARK
             LoadForWarehouse = [warehouse]
         case NodeType.sink:
             capacity = ref_data["max_capacity"]
             cost = 0
-            value = 0
         case NodeType.INVALID:
             assert node_type is not NodeType.INVALID, "INVALID node type."
             return  # Unreachable: Stops pyright unbound error reporting.
 
-    node = Node(node_id, node_type, capacity, min_capacity, cost, value, LoadForWarehouse)
+    node = Node(node_id, node_type, capacity, min_capacity, cost, LoadForWarehouse)
     if node.key not in nodes:
         if node.type is NodeType.warehouse:
             node.LoadForWarehouse = [node]
@@ -382,24 +358,15 @@ def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict
 def process_origin(
     nodes: Dict[str, Node], arcs: Dict[tuple, Arc], origin: Node, ref_data: Dict[str, Any]
 ):
-    """Add origin supply value nodes and arcs between the source and origin nodes."""
+    """Add origin warehouse values and arcs between the source and origin nodes."""
     for i, (warehouse_id, value_data) in enumerate(ref_data["origin_values"][origin.id].items()):
         if i > ref_data["top_n_origin_values"]:
-            return
-        warehouse = get_node(nodes, warehouse_id, NodeType.warehouse, ref_data)
+            break
         if value_data["value"] == 0:
             continue
+        origin.warehouse_values[warehouse_id] = value_data
 
-        supply_node = get_node(
-            nodes,
-            "",
-            NodeType.supply,
-            ref_data,
-            origin=origin,
-            warehouse=warehouse,
-        )
-        add_arcs(nodes, arcs, nodes["source"], supply_node)
-        add_arcs(nodes, arcs, supply_node, origin)
+    add_arcs(nodes, arcs, nodes["source"], origin)
 
 
 def process_town(
@@ -455,7 +422,7 @@ def nearest_n_warehouses(ref_data: Dict[str, Any], graph_data: GraphData, neares
     for node_id, node in graph_data["nodes"].items():
         if node.type in {NodeType.waypoint, NodeType.town}:
             distances = []
-            for warehouse_key, warehouse in graph_data["warehouse_nodes"].items():
+            for warehouse in graph_data["warehouse_nodes"].values():
                 town_id = ref_data["warehouse_to_town"][warehouse.id]
                 distances.append((warehouse, all_pairs[node.id][town_id]))
             nearest_warehouses[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
@@ -497,6 +464,10 @@ def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
             node.LoadForWarehouse = [w for w in warehouse_nodes.values()]
         elif node.type in [NodeType.waypoint, NodeType.town]:
             node.LoadForWarehouse = [w for w in nearest_warehouses[node.key]]
+        elif node.type is NodeType.origin:
+            node.LoadForWarehouse = [
+                w for w in warehouse_nodes.values() if w.id in node.warehouse_values.keys()
+            ]
 
     contract_graph(graph_data)
 
