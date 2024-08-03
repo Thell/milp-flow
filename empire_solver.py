@@ -210,7 +210,7 @@ def create_problem(graph_data, max_cost):
     return prob
 
 
-def main(max_cost=400, lodging_bonus=1, top_n=2, nearest_n=4, waypoint_capacity=15):
+def main(max_cost=400, lodging_bonus=0, top_n=2, nearest_n=4, waypoint_capacity=15):
     """
     top_n: count of supply nodes per warehouse by value (index based, zero=1)
     nearest_n: count of nearest warehouses available on waypoint nodes (index based, zero=1)

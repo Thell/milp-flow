@@ -440,7 +440,7 @@ def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
 
     arcs: Dict[tuple[str, str], Arc] = {}
     nodes: Dict[str, Node] = {}
-    ref_data = get_reference_data(lodging_bonus, top_n)
+    ref_data = get_reference_data(lodging_bonus + 1, top_n + 1)
     ref_data["waypoint_capacity"] = waypoint_capacity
 
     get_node(nodes, "source", NodeType.source, ref_data)
@@ -476,7 +476,7 @@ def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
 
 def main(write=True):
     # n 1 to 24
-    graph_data = generate_empire_data(lodging_bonus=4, top_n=2, nearest_n=5, waypoint_capacity=50)
+    graph_data = generate_empire_data(lodging_bonus=0, top_n=3, nearest_n=4, waypoint_capacity=50)
 
     print_sample_nodes(graph_data, detailed=True)
     print_sample_arcs(graph_data, detailed=False)
