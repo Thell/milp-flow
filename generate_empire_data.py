@@ -4,11 +4,15 @@ Generate the arcs and nodes used for MILP optimized node empire solver.
 
 from __future__ import annotations
 from enum import IntEnum, auto
+import json
+import logging
 from typing import Any, Dict, List, TypedDict
 
 import networkx as nx
 
 from file_utils import read_workerman_json, read_user_json, write_user_json
+
+logger = logging.getLogger(__name__)
 
 
 class GraphData(TypedDict):
@@ -249,7 +253,9 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             capacity = ref_data["waypoint_capacity"]
             cost = ref_data["waypoint_data"][node_id]["CP"]
         case NodeType.warehouse:
-            capacity = ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
+            capacity = (
+                1 + ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
+            )
             cost = 0
             LoadForWarehouse = []
         case NodeType.lodging:
@@ -277,11 +283,12 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     return nodes[node.key]
 
 
-def get_reference_data(lodging_bonus, top_n):
+# def get_reference_data(lodging_bonus, top_n):
+def get_reference_data(config):
     """Read and prepare data from reference json files."""
     ref_data = {
-        "lodging_bonus": lodging_bonus,  # There's always at least 1 free lodging.
-        "top_n_origin_values": top_n,
+        "lodging_bonus": config["lodging_bonus"],
+        "top_n_origin_values": config["top_n"],
         "all_plantzones": read_workerman_json("plantzone.json").keys(),
         "lodging_data": read_workerman_json("all_lodging_storage.json"),
         "origin_values": read_user_json("node_values_per_town.json"),
@@ -303,26 +310,25 @@ def get_reference_data(lodging_bonus, top_n):
     for warehouse, lodgings in ref_data["lodging_data"].items():
         if warehouse not in ref_data["warehouses"]:
             continue
-        max_lodging = ref_data["lodging_bonus"] + max([int(k) for k in lodgings.keys()])
+        max_lodging = 1 + ref_data["lodging_bonus"] + max([int(k) for k in lodgings.keys()])
         ref_data["lodging_data"][warehouse]["max_capacity"] = max_lodging
 
     return ref_data
 
 
-def print_sample_nodes(graph_data: GraphData, detailed: bool = False):
+def print_sample_nodes(graph_data: GraphData):
     """Print sample nodes."""
     seen_node_types = set()
     for _, node in graph_data["nodes"].items():
         if node.type in seen_node_types:
             continue
         seen_node_types.add(node.type)
-        print(node)
-        if detailed and node.type not in [NodeType.source, NodeType.sink]:
-            print(node.as_dict())
-            print()
+        logging.info(node)
+        if node.type not in [NodeType.source, NodeType.sink]:
+            logging.debug(node.as_dict())
 
 
-def print_sample_arcs(graph_data: GraphData, detailed: bool = False):
+def print_sample_arcs(graph_data: GraphData):
     """Print sample arcs."""
     seen_arc_prefixes = set()
     for _, arc in graph_data["arcs"].items():
@@ -330,10 +336,9 @@ def print_sample_arcs(graph_data: GraphData, detailed: bool = False):
         if prefix_pair in seen_arc_prefixes:
             continue
         seen_arc_prefixes.add(prefix_pair)
-        print(arc)
-        if detailed and arc.source.type != NodeType.source and arc.destination.type != NodeType.sink:
-            print(arc.as_dict())
-            print()
+        logging.info(arc)
+        if arc.source.type != NodeType.source and arc.destination.type != NodeType.sink:
+            logging.debug(arc.as_dict())
 
 
 def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict[str, Any]):
@@ -359,7 +364,7 @@ def process_origin(
     nodes: Dict[str, Node], arcs: Dict[tuple, Arc], origin: Node, ref_data: Dict[str, Any]
 ):
     """Add origin warehouse values and arcs between the source and origin nodes."""
-    for i, (warehouse_id, value_data) in enumerate(ref_data["origin_values"][origin.id].items()):
+    for i, (warehouse_id, value_data) in enumerate(ref_data["origin_values"][origin.id].items(), 1):
         if i > ref_data["top_n_origin_values"]:
             break
         if value_data["value"] == 0:
@@ -377,7 +382,7 @@ def process_town(
     lodging_data = ref_data["lodging_data"][warehouse_id]
     lodging_bonus = ref_data["lodging_bonus"]
 
-    max_capacity = lodging_data["max_capacity"] + lodging_bonus
+    max_capacity = 1 + lodging_data["max_capacity"] + lodging_bonus
     warehouse_node = get_node(
         nodes, warehouse_id, NodeType.warehouse, ref_data, capacity=max_capacity
     )
@@ -387,10 +392,10 @@ def process_town(
     for capacity, lodging_data in lodging_data.items():
         if capacity == "max_capacity":
             continue
-        max_capacity = int(capacity) + ref_data["lodging_bonus"]
+        max_capacity = 1 + int(capacity) + ref_data["lodging_bonus"]
         lodging_node = get_node(
             nodes,
-            f"{warehouse_node.id}_for_{int(capacity) + lodging_bonus}",
+            f"{warehouse_node.id}_for_{1 + int(capacity) + lodging_bonus}",
             NodeType.lodging,
             ref_data,
             capacity=max_capacity,
@@ -431,17 +436,16 @@ def nearest_n_warehouses(ref_data: Dict[str, Any], graph_data: GraphData, neares
     return nearest_warehouse_nodes
 
 
-def contract_graph(graph_data: GraphData):
-    pass
-
-
-def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
+# def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
+def generate_empire_data(config):
     """Generate and return a Dict of Node and arc objects composing the empire data."""
+    validate_config(config)
+    logging.basicConfig(level=config["data_log_level"])
 
     arcs: Dict[tuple[str, str], Arc] = {}
     nodes: Dict[str, Node] = {}
-    ref_data = get_reference_data(lodging_bonus + 1, top_n + 1)
-    ref_data["waypoint_capacity"] = waypoint_capacity
+    ref_data = get_reference_data(config)
+    ref_data["waypoint_capacity"] = config["waypoint_capacity"]
 
     get_node(nodes, "source", NodeType.source, ref_data)
     get_node(nodes, "sink", NodeType.sink, ref_data)
@@ -458,7 +462,7 @@ def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
     }
 
     # All warehouse nodes have now been generated, finalize LoadForWarehouse entries
-    nearest_warehouses = nearest_n_warehouses(ref_data, graph_data, nearest_n)
+    nearest_warehouses = nearest_n_warehouses(ref_data, graph_data, config["nearest_n"])
     for node in nodes_dict.values():
         if node.type in [NodeType.source, NodeType.sink]:
             node.LoadForWarehouse = [w for w in warehouse_nodes.values()]
@@ -469,28 +473,40 @@ def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
                 w for w in warehouse_nodes.values() if w.id in node.warehouse_values.keys()
             ]
 
-    contract_graph(graph_data)
-
     return graph_data
 
 
-def main(write=True):
-    # n 1 to 24
-    graph_data = generate_empire_data(lodging_bonus=0, top_n=3, nearest_n=4, waypoint_capacity=50)
+def validate_config(config):
+    assert config["max_cost"] >= 1, "A maximum cost is required."
+    assert config["lodging_bonus"] >= 0 and config["lodging_bonus"] <= 3, "Limit of 3 bonus lodging."
+    assert (
+        config["top_n"] >= 1 and config["top_n"] <= 24
+    ), "Top n valued towns per worker node are required."
+    assert (
+        config["nearest_n"] >= config["top_n"] and config["nearest_n"] <= 24
+    ), "Waypoints require the nearest n towns."
 
-    print_sample_nodes(graph_data, detailed=True)
-    print_sample_arcs(graph_data, detailed=False)
-    print(f"Num arcs: {len(graph_data["arcs"])}, Num nodes: {len(graph_data["nodes"])}")
 
-    if write:
-        data = {
-            "arcs": [arc.as_dict() for _, arc in graph_data["arcs"].items()],
-            "nodes": [node.as_dict() for _, node in graph_data["nodes"].items()],
-        }
+def main(config):
+    validate_config(config)
+    logging.basicConfig(level=config["data_log_level"])
 
-        filepath = write_user_json("full_empire.json", data)
-        print(f"Empire data written to {filepath}")
+    graph_data = generate_empire_data(config)
+
+    print_sample_nodes(graph_data)
+    print_sample_arcs(graph_data)
+    logging.info(f"Num arcs: {len(graph_data["arcs"])}, Num nodes: {len(graph_data["nodes"])}")
+
+    data = {
+        "arcs": [arc.as_dict() for _, arc in graph_data["arcs"].items()],
+        "nodes": [node.as_dict() for _, node in graph_data["nodes"].items()],
+    }
+
+    filepath = write_user_json("full_empire.json", data)
+    print(f"Empire data written to {filepath}")
 
 
 if __name__ == "__main__":
-    main()
+    with open("config.json", "r") as file:
+        config = json.load(file)
+    main(config)

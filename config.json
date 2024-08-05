@@ -1,0 +1,16 @@
+{
+    "max_cost": 30,
+    "lodging_bonus": 0,
+    "top_n": 3,
+    "nearest_n": 5,
+    "waypoint_capacity": 15,
+    "solve_log_level": "INFO",
+    "data_log_level": "INFO",
+    "solver": {
+        "file_prefix": "",
+        "file_suffix": "",
+        "mips_tol": 1e-6,
+        "mips_gap": "auto",
+        "time_limit": "inf"
+    }
+}

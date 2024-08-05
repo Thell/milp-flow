@@ -17,21 +17,25 @@ results in proper binary assignments but takes much longer to solve. Using a sma
 and rounding the results improves performance while still obtaining proper results.
 """
 
+import json
+import logging
+from operator import itemgetter
 from pathlib import Path
 from typing import List
 
-import json
+
+import natsort
 import pulp
 
-from print_utils import print_empire_solver_output
 from generate_empire_data import (
     NodeType,
     Node,
     Arc,
     generate_empire_data,
-    get_reference_data,
     GraphData,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_load_hasload_vars(prob: pulp.LpProblem, obj: Node | Arc, load_vars: List[Node]):
@@ -189,8 +193,10 @@ def add_source_to_sink_constraint(prob: pulp.LpProblem, graph_data: GraphData):
     )
 
 
-def create_problem(graph_data, max_cost):
+def create_problem(config, graph_data):
     """Create the problem and add the varaibles and constraints."""
+    max_cost = config["max_cost"]
+
     prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
 
     create_node_vars(prob, graph_data)
@@ -210,75 +216,190 @@ def create_problem(graph_data, max_cost):
     return prob
 
 
-def main(max_cost=400, lodging_bonus=0, top_n=2, nearest_n=4, waypoint_capacity=15):
-    """
-    top_n: count of supply nodes per warehouse by value (index based, zero=1)
-    nearest_n: count of nearest warehouses available on waypoint nodes (index based, zero=1)
-    waypoint_capacity: max loads on a waypoint
-    """
-    graph_data: GraphData = generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity)
-    prob = create_problem(graph_data, max_cost)
+def config_solver(config, outfile_path, filename):
+    mips_tol = config["solver"]["mips_tol"]
+    mips_gap = config["solver"]["mips_gap"]
+    if mips_gap == "auto":
+        mips_gap = config["max_cost"] / 10_000
+    time_limit = config["solver"]["time_limit"]
 
-    prefix = "RemoveSupply"
-    suffix = "no_gap"
-    mips_tol = 1e-6
-    mips_gap = max_cost / 10_000
+    options = [
+        "parallel=on",
+        "threads=16",
+        f"time_limit={time_limit}",
+        f"mip_rel_gap={mips_gap}",
+        "mip_heuristic_effort=0.5",
+        f"mip_feasibility_tolerance={mips_tol}",
+        f"primal_feasibility_tolerance={mips_tol}",
+        "mip_improving_solution_save=on",
+        f"mip_improving_solution_file={outfile_path}/improvements/{filename}.sol",
+    ]
+    options = [o for o in options if "default" not in o]
 
+    solver = pulp.HiGHS_CMD(
+        path="/home/thell/.local/bin/highs",
+        keepFiles=True,
+        options=options,
+        logPath=f"{outfile_path}/logs/{filename}.log",
+    )
+    return solver
+
+
+def config_filename(config):
+    max_cost = config["max_cost"]
+    lodging_bonus = config["lodging_bonus"]
+    top_n = config["top_n"]
+    nearest_n = config["nearest_n"]
+    waypoint_capacity = config["waypoint_capacity"]
+    prefix = config["solver"]["file_prefix"]
+    suffix = config["solver"]["file_suffix"]
+    mips_gap = config["solver"]["mips_gap"]
+    if mips_gap == "auto":
+        mips_gap = max_cost / 10_000
+    mips_gap = str(mips_gap).replace("0.", "")
     if prefix:
         prefix = f"{prefix}_"
     if suffix:
         suffix = f"_{suffix}"
 
-    filename = f"{prefix}mc{max_cost}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_capacity}{suffix}"
-    outfile_path = "/home/thell/milp-flow/highs_output"
+    filename = f"{prefix}mc{max_cost}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_capacity}_g{mips_gap}{suffix}"
+    return filename
 
-    prob.writeLP(f"{outfile_path}/models/{filename}.lp")
 
-    solver = pulp.HiGHS_CMD(
-        path="/home/thell/.local/bin/highs",
-        keepFiles=True,
-        threads=16,
-        logPath=f"{outfile_path}/logs/{filename}.log",
-        options=[
-            "parallel=on",
-            "threads=16",
-            f"mip_rel_gap={mips_gap}",
-            "mip_heuristic_effort=0.5",
-            f"mip_feasibility_tolerance={mips_tol}",
-            f"primal_feasibility_tolerance={mips_tol}",
-            "mip_improving_solution_save=on",
-            f"mip_improving_solution_file={outfile_path}/improvements/{filename}.sol",
-        ],
-    )
+def print_solving_info_header(config):
+    max_cost = config["max_cost"]
+    lodging_bonus = config["lodging_bonus"]
+    top_n = config["top_n"]
+    nearest_n = config["nearest_n"]
+    waypoint_capacity = config["waypoint_capacity"]
+    mips_tol = config["solver"]["mips_tol"]
+    mips_gap = config["solver"]["mips_gap"]
+    if mips_gap == "auto":
+        mips_gap = max_cost / 10_000
 
-    print()
-    print(
-        f"=== Solving: max_cost: {max_cost}, Lodging_bonus: {lodging_bonus} top_n: {top_n},"
+    logging.info(
+        f"\n===================================================="
+        f"\nSolving: max_cost: {max_cost}, Lodging_bonus: {lodging_bonus} top_n: {top_n},"
         f" nearest_n: {nearest_n}, capacity={waypoint_capacity}"
         f"\nUsing threads=16 and mip_feasibility_tolerance={mips_tol}, gap: {mips_gap}"
     )
-    print()
 
+
+def extract_solution(config, prob, graph_data):
+    solution_vars = {}
+    gt0lt1_vars = set()
+
+    for v in prob.variables():
+        if v.varValue is not None and v.varValue > 0:
+            if v.varValue < 1:
+                gt0lt1_vars.add(v.name)
+            rounded_value = round(v.varValue)
+            if rounded_value >= 1:
+                solution_vars[v.name] = {
+                    "value": rounded_value,
+                    "lowBound": v.lowBound,
+                    "upBound": v.upBound,
+                }
+
+    calculated_cost = 0
+    outputs = []
+    arc_loads = []
+    waypoint_loads = []
+    for k, v in solution_vars.items():
+        if k.startswith("Load_"):
+            kname = k.replace("Load_", "")
+            if "_to_" in k:
+                # An arc
+                source, destination = kname.split("_to_")
+                arc_key = (source, destination)
+                arc = graph_data["arcs"].get(arc_key, None)
+                outputs.append(f"{arc}, {v}")
+                if arc.source.type is NodeType.waypoint or arc.destination.type is NodeType.waypoint:
+                    arc_loads.append((arc, v["value"]))
+            else:
+                # A node
+                node = graph_data["nodes"].get(kname, None)
+                outputs.append(f"{node}, {v}")
+                calculated_cost = calculated_cost + node.cost
+                if node.type is NodeType.waypoint:
+                    waypoint_loads.append((node, v["value"]))
+    outputs = natsort.natsorted(outputs)
+
+    solver_cost = 0
+    if "cost" in solution_vars.keys():
+        solver_cost = int(solution_vars["cost"]["value"])
+    solver_value = round(solution_vars["value"]["value"])
+
+    if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
+        logging.debug("Detailed Solution:")
+        for output in outputs:
+            logging.debug(output)
+
+    logging.info(
+        f"\n"
+        f"         Load_source: {solution_vars["Load_source"]["value"]}\n"
+        f"           Load_sink: {solution_vars["Load_sink"]["value"]}\n"
+        f"     Calculated cost: {calculated_cost}\n"
+        f"         Solver cost: {calculated_cost}\n"
+        f"            Max cost: {config["max_cost"]}\n"
+        f"               Value: {round(solver_value)}\n"
+        f"          Value/Cost: {round(solver_value / max(1, solver_cost, calculated_cost))}\n"
+        f"    Num origin nodes: {len([x for x in outputs if x.startswith("Node(name: origin_")])}\n"
+        f"   Max waypoint load: {max(waypoint_loads, key=itemgetter(1))}\n"
+        f"       Max arc load: {max(arc_loads, key=itemgetter(1))}\n"
+    )
+    if gt0lt1_vars:
+        logging.warning(f"WARNING: 0 < x < 1 vars count: {len(gt0lt1_vars)}")
+
+    data = {"config": config, "solution_vars": solution_vars}
+    return data
+
+
+def empire_solver(config):
+    graph_data: GraphData = generate_empire_data(config)
+    prob = create_problem(config, graph_data)
+
+    filename = config_filename(config)
+    outfile_path = "/home/thell/milp-flow/highs_output"
+    prob.writeLP(f"{outfile_path}/models/{filename}.lp")
+
+    print_solving_info_header(config)
+    solver = config_solver(config, outfile_path, filename)
     solver.solve(prob)
 
-    ref_data = get_reference_data(lodging_bonus, top_n)
-    out_data = print_empire_solver_output(
-        prob, graph_data, ref_data, max_cost, top_n, detailed=False
-    )
+    old_path = f"{outfile_path}/../MaximizeEmpireValue-pulp.sol"
+    new_path = f"{outfile_path}/solutions/{filename}.sol"
+    Path(old_path).rename(new_path)
+    print("Solution moved to:", new_path)
+
+    out_data = extract_solution(config, prob, graph_data)
     value = round(out_data["solution_vars"]["value"]["value"])
     filepath = f"{outfile_path}/solution-vars/{filename}_{value}.json"
     with open(filepath, "w") as file:
         json.dump(out_data, file, indent=4)
-
-    print("Solution vars saved to:", filepath)
-    old_path = f"{outfile_path}/../MaximizeEmpireValue-pulp.sol"
-    new_path = f"{outfile_path}/solutions/{filename}.sol"
-    Path(old_path).rename(new_path)
+    print("Solution vars written to:", filepath)
 
     assert (
         prob.variablesDict()["Load_source"].value() == prob.variablesDict()["Load_sink"].value()
     ), "Load value mismatch between source and sink."
 
 
+def main(config):
+    """
+    top_n: count of supply nodes per warehouse by value (index based, zero=1)
+    nearest_n: count of nearest warehouses available on waypoint nodes (index based, zero=1)
+    waypoint_capacity: max loads on a waypoint
+    """
+    # for max_cost in [10, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
+    for max_cost in [200, 250, 300, 350, 400, 450, 501]:
+        config["max_cost"] = max_cost
+        config["solver"]["file_prefix"] = "Full"
+        config["solver"]["mips_gap"] = "default"
+        config["solver"]["time_limit"] = "default"
+        empire_solver(config)
+
+
 if __name__ == "__main__":
-    main()
+    with open("config.json", "r") as file:
+        config = json.load(file)
+    main(config)

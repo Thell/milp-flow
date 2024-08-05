@@ -1,8 +1,9 @@
-from operator import itemgetter
-import natsort
+import logging
 import pulp
 
 from generate_empire_data import NodeType
+
+logger = logging.getLogger(__name__)
 
 
 def print_solver_output(prob, data, arc_vars, doFull=False):
@@ -88,76 +89,3 @@ def print_solver_output(prob, data, arc_vars, doFull=False):
         [int(node.replace("transit_", "")) for node in list(set(active_transit_nodes))]
     )
     print(f"Transit nodes ({len(transit_nodes)}):\n{transit_nodes}")
-
-
-def print_empire_solver_output(prob, graph_data, ref_data, max_cost, top_n, detailed=False):
-    solution_vars = {}
-    gt0lt1_vars = set()
-
-    for v in prob.variables():
-        if v.varValue is not None and v.varValue > 0:
-            if v.varValue < 1:
-                gt0lt1_vars.add(v.name)
-            rounded_value = round(v.varValue)
-            if rounded_value >= 1:
-                solution_vars[v.name] = {
-                    "value": rounded_value,
-                    "lowBound": v.lowBound,
-                    "upBound": v.upBound,
-                }
-
-    calculated_cost = 0
-    outputs = []
-    arc_loads = []
-    waypoint_loads = []
-    for k, v in solution_vars.items():
-        if k.startswith("Load_"):
-            kname = k.replace("Load_", "")
-            if "_to_" in k:
-                # An arc
-                source, destination = kname.split("_to_")
-                arc_key = (source, destination)
-                arc = graph_data["arcs"].get(arc_key, None)
-                outputs.append(f"{arc}, {v}")
-                if arc.source.type is NodeType.waypoint or arc.destination.type is NodeType.waypoint:
-                    arc_loads.append((arc, v["value"]))
-            else:
-                # A node
-                node = graph_data["nodes"].get(kname, None)
-                outputs.append(f"{node}, {v}")
-                calculated_cost = calculated_cost + node.cost
-                if node.type is NodeType.waypoint:
-                    waypoint_loads.append((node, v["value"]))
-    outputs = natsort.natsorted(outputs)
-
-    solver_cost = 0
-    if "cost" in solution_vars.keys():
-        solver_cost = int(solution_vars["cost"]["value"])
-
-    solver_value = round(solution_vars["value"]["value"])
-
-    if detailed:
-        print("\nDetailed Solution:")
-        for output in outputs:
-            print(output)
-
-    print()
-    print("         Load_source:", solution_vars["Load_source"]["value"])
-    print("           Load_sink:", solution_vars["Load_sink"]["value"])
-    print()
-    print("     Calculated cost:", calculated_cost)
-    print("         Solver cost:", calculated_cost)
-    print("            Max cost:", max_cost)
-    print("               Value:", round(solver_value))
-    print("          Value/Cost:", round(solver_value / max(1, solver_cost, calculated_cost)))
-    print()
-    print("    Num origin nodes:", len([x for x in outputs if x.startswith("Node(name: origin_")]))
-    print("   Max waypoint load:", max(waypoint_loads, key=itemgetter(1)))
-    print("       Max arc load:", max(arc_loads, key=itemgetter(1)))
-    print()
-    if gt0lt1_vars:
-        print("WARNING: 0 < x < 1 vars count:", len(gt0lt1_vars))
-        print()
-
-    data = {"max_cost": max_cost, "solution_vars": solution_vars}
-    return data
