@@ -206,7 +206,8 @@ def create_problem(config, graph_data):
     total_value_var = create_value_var(prob, graph_data)
     total_cost_var = create_cost_var(prob, graph_data, max_cost)
 
-    prob += total_value_var - total_cost_var, "ObjectiveFunction"
+    prob += total_value_var, "ObjectiveFunction"
+    # prob += total_value_var - total_cost_var, "ObjectiveFunction"
     prob += total_cost_var <= max_cost, "MaxCost"
 
     add_source_to_warehouse_constraints(prob, graph_data)
@@ -393,9 +394,13 @@ def main(config):
     # for max_cost in [10, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
     for max_cost in [200, 250, 300, 350, 400, 450, 501]:
         config["max_cost"] = max_cost
-        config["solver"]["file_prefix"] = "Full"
+        config["top_n"] = 3
+        config["nearest_n"] = 5
+        config["waypoint_capacity"] = 25
+        config["solver"]["file_prefix"] = ""
+        config["solver"]["file_suffix"] = "NoCostObj"
         config["solver"]["mips_gap"] = "default"
-        config["solver"]["time_limit"] = "default"
+        config["solver"]["time_limit"] = "14400"
         empire_solver(config)
 
 

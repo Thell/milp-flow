@@ -1,5 +1,6 @@
 """Parse optimizer output for workerman import."""
 
+from collections import Counter
 import json
 import locale
 import logging
@@ -187,7 +188,7 @@ def process_solution_vars_file(solution_data):
     outputs = []
     town_ids = set()
     workerman_user_workers = []
-
+    warehouse_ranks = []
     for k, v in origin_vars.items():
         town_id = ref_data["warehouse_to_town"][v]
 
@@ -201,7 +202,8 @@ def process_solution_vars_file(solution_data):
 
         value = origin.warehouse_values[v]["value"]
         worker = origin.warehouse_values[v]["worker"]
-        warehouse_rank = list(origin.warehouse_values.keys()).index(v)
+        warehouse_rank = list(origin.warehouse_values.keys()).index(v) + 1
+        warehouse_ranks.append(warehouse_rank)
 
         origin_cost += origin.cost
         calculated_value += value
@@ -222,6 +224,7 @@ def process_solution_vars_file(solution_data):
         "waypoints": sum(graph_data["nodes"][k].cost for k in waypoint_vars.keys()),
     }
     print_summary(outputs, counts, costs, calculated_value)
+    print("Warehouse rank counts:", {k: v for k, v in Counter(warehouse_ranks).items()})
 
     lodging_bonuses = get_workerman_lodging_bonuses(solution_data["config"]["lodging_bonus"])
     workerman_ordered_workers = order_workerman_workers(graph, workerman_user_workers, distances)
@@ -232,11 +235,11 @@ def process_solution_vars_file(solution_data):
 
 def main():
     filepath = "highs_output/solution-vars"
-    input_files = [
-        os.path.join(filepath, f) for f in os.listdir(filepath) if f.startswith("Full_mc")
-    ]
+    input_files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
 
     for filepath in input_files:
+        if "NoCostObj_mc501_lb3_tn4_nn5_wc25" not in filepath:
+            continue
         logging.info("Processing:", filepath.split("/")[-1])
 
         solution_data = read_solution_vars_json(filepath)
