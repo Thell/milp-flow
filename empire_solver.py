@@ -197,7 +197,7 @@ def create_problem(config, graph_data):
     """Create the problem and add the varaibles and constraints."""
     max_cost = config["max_cost"]
 
-    prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
+    prob = pulp.LpProblem(config["problem_name"], pulp.LpMaximize)
 
     create_node_vars(prob, graph_data)
     create_arc_vars(prob, graph_data, max_cost)
@@ -238,7 +238,8 @@ def config_solver(config, outfile_path, filename):
     options = [o for o in options if "default" not in o]
 
     solver = pulp.HiGHS_CMD(
-        path="/home/thell/.local/bin/highs",
+        # path="/home/thell/.local/bin/highs",
+        path="/home/thell/HiGHS/build/bin/highs",
         keepFiles=True,
         options=options,
         logPath=f"{outfile_path}/logs/{filename}.log",
@@ -368,7 +369,7 @@ def empire_solver(config):
     solver = config_solver(config, outfile_path, filename)
     solver.solve(prob)
 
-    old_path = f"{outfile_path}/../MaximizeEmpireValue-pulp.sol"
+    old_path = f"{outfile_path}/../{config["problem_name"]}-pulp.sol"
     new_path = f"{outfile_path}/solutions/{filename}.sol"
     Path(old_path).rename(new_path)
     print("Solution moved to:", new_path)
@@ -392,15 +393,22 @@ def main(config):
     waypoint_capacity: max loads on a waypoint
     """
     # for max_cost in [10, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
-    for max_cost in [200, 250, 300, 350, 400, 450, 501]:
+    #  5 =>  T       0       0         0   0.00%   15359558.14602  13900824.10784    10.49%      143     64     71      5863     6.1s
+    # 10 =>  B       0       0         0   0.00%   28716100.34491  24954483.03307    15.07%      217    177    193     32696    16.6s
+    # 20 =>       1219       1       574  98.44%   46898131.74265  44334018.50963     5.78%     1178    448   9665    547898   260.2s
+    # 30 =>       4848       5      2375  98.43%   61392872.65119  58540724.99758     4.87%     1610    720   9460     2483k  1334.5s
+    # 50 =>
+
+    for max_cost in [5, 10, 20, 30, 50]:
+        config["problem_name"] = "MaximizeEmpireValue"
         config["max_cost"] = max_cost
-        config["top_n"] = 3
+        config["top_n"] = 4
         config["nearest_n"] = 5
         config["waypoint_capacity"] = 25
         config["solver"]["file_prefix"] = ""
         config["solver"]["file_suffix"] = "NoCostObj"
         config["solver"]["mips_gap"] = "default"
-        config["solver"]["time_limit"] = "14400"
+        config["solver"]["time_limit"] = "18000"
         empire_solver(config)
 
 
