@@ -23,12 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 def create_problem(config, G):
-    """Create the problem and add the varaibles and constraints."""
+    """Create the problem and add the variables and constraints."""
 
     prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
-
-    # Testing based on ordering of vars/constraints it seems order is important for performance.
-    # Budget of 501 still takes ~18000s but Expl% jumps from 68% to 100%.
 
     # Create 𝒙 ∈ {0,1} for each node indicating if node is in solution.
     for v in G["V"].values():
@@ -72,13 +69,6 @@ def create_problem(config, G):
     cost = LpVariable("cost", lowBound=0, upBound=config["budget"], cat="Integer")
 
     # Objective... Maximize total prizes.
-    # When this is last the time for a 50-4-5-25 is ~3300s and 501-4-5-25 hit 97.79% @ 18000s
-    # 62432     104     21758  97.79%   410583217.1252  409701270.7536     0.22%     2308    813   9942    38487k 17997.4s
-    # When this is first the time for a 501-4-5-25 to hit 07.79% is 18114s
-    # 62383     147     21713  97.15%   410650656.7847  409701270.7536     0.23%     2320    819   9871    38217k 17997.3s
-    # 62432     104     21758  97.79%   410583217.1252  409701270.7536     0.22%     2308    813   9942    38487k 18114.3s
-    # 62555       6     21868  99.11%   410280372.0681  409701270.7536     0.14%     2244    757  10261    38753k 18228.4s completed
-    # variance could easily be system load but I like having it last anyways.
     prizes = [
         v.𝓻_prizes[𝓻.id]["value"] * v.pulp_vars[f"ƒ𝓻_{𝓻.id}"]
         for v in G["V"].values()
@@ -87,7 +77,7 @@ def create_problem(config, G):
     ]
     prob += lpSum(prizes), "ObjectiveFunction"
 
-    # Constraints...
+    # Constraints
 
     # ∑ƒ⁺𝓢𝒓 == ∑ƒ⁻𝓣𝒓
     prob += G["V"]["𝓢"].pulp_vars["ƒ"] == G["V"]["𝓣"].pulp_vars["ƒ"], "ƒ𝓢_to_ƒ𝓣"
@@ -99,26 +89,19 @@ def create_problem(config, G):
     for 𝒓 in G["R"].values():
         prob += lpSum(a.pulp_vars["𝒙"] for a in 𝒓.outbound_arcs) <= 1, f"ƒ⁺𝓡_{𝒓.id}_to_ƒ⁻𝓣"
 
-    # The only use of total node ƒ is to set the indicators and the only use of the indicators is
-    # for summation of costs.
-    #
     # 𝒙 == 1 if ƒ >= 1 else 0 for all nodes
     for v in G["V"].values():
         ƒ = v.pulp_vars["ƒ"]
         𝒙 = v.pulp_vars["𝒙"]
 
         ƒ_vars = [v for k, v in v.pulp_vars.items() if k.startswith("ƒ𝓻_")]
-        # ϵ = 1e-5
-        # M = v.𝓬 + ϵ
-        M = min(v.𝓬, config["budget"])
+        ϵ = 1e-5
+        M = v.𝓬 + ϵ
 
         prob += ƒ == lpSum(ƒ_vars), f"ƒ_{v.name()}"
-        # prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{v.name()}"
-        prob += ƒ <= M * 𝒙, f"↧_{v.name()}"
+        prob += ƒ >= ϵ - v.𝓬 * (1 - 𝒙), f"↥_{v.name()}"
+        prob += ƒ <= v.𝓬 * 𝒙, f"↧_{v.name()}"
 
-    # The only use of total arc ƒ is to set the indicators and the only use of the indicators is
-    # for the single arc(𝒓, lodging) within each 𝓡 group constraint.
-    #
     # 𝒙 == 1 if ƒ >= 1 else 0 for all arc(𝒓, lodging) arcs within each 𝓡 group
     for a in G["E"].values():
         if a.source.type is NT.R:
@@ -126,12 +109,11 @@ def create_problem(config, G):
             𝒙 = a.pulp_vars["𝒙"]
 
             ƒ_vars = [v for k, v in a.pulp_vars.items() if k.startswith("ƒ𝓻_")]
-            # ϵ = 1e-5
-            # M = a.𝓬 + ϵ
-            M = min(a.𝓬, config["budget"])
+            ϵ = 1e-5
+            M = a.𝓬
 
             prob += ƒ == lpSum(ƒ_vars), f"ƒ_{a.name()}"
-            # prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{a.name()}"
+            prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{a.name()}"
             prob += ƒ <= M * 𝒙, f"↧_{a.name()}"
 
     # ƒ𝓻⁻ == 𝒗(ƒ𝓻) == ƒ𝓻⁺
@@ -343,7 +325,7 @@ def main(config):
     # 30 =>       5145       5      2522 100.00%   61602751.05139  58540724.99758     5.23%     1842    417   9993     2542k  1270.5s
     # 50 =>       9894       4      4807  99.95%   86395249.99527  84340234.96242     2.44%     2442    713  10038     5310k  2912.3s
 
-    for budget in [5, 10, 20, 30, 50]:
+    for budget in [501]:
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5

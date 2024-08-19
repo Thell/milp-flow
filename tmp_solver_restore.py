@@ -33,77 +33,78 @@ logger = logging.getLogger(__name__)
 
 
 def create_problem(config, G):
-    """Create the problem and add the varaibles and constraints."""
+    """Create the problem and add the variables and constraints."""
 
     prob = pulp.LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
 
-    # Testing performance based on ordering of vars.
-
-    # First we'll create the indicator vars for nodes.
+    # Create 𝒙 ∈ {0,1} for each node indicating if node is in solution.
     for v in G["V"].values():
-        𝒙 = LpVariable(f"𝒙_{v.name()}", cat="Binary")
-        v.pulp_vars["𝒙"] = 𝒙
-    # Edges don't have indicator vars except...
-    for arc in G["E"].values():
-        if arc.source.type is NT.R:
-            𝒙 = LpVariable(f"𝒙_{arc.name()}", cat="Binary")
-            arc.pulp_vars["𝒙"] = 𝒙
+        v.pulp_vars["𝒙"] = LpVariable(f"𝒙_{v.name()}", cat="Binary")
 
-    # Then we'll create the individual node f vars
+    # Create 𝒙 ∈ {0,1} for each 𝓻 indicating if arc(𝓻, lodging) is used in solution.
+    for a in G["E"].values():
+        if a.source.type is NT.R:
+            a.pulp_vars["𝒙"] = LpVariable(f"𝒙_{a.name()}", cat="Binary")
+
+    # Create ƒ ∈ ℕ₀ for each node such that 0 <= ƒ <= 𝓬
     for v in G["V"].values():
-        ƒ = LpVariable(f"ƒ_{v.name()}", lowBound=0, upBound=v.𝓬, cat="Integer")
-        v.pulp_vars["ƒ"] = ƒ
-    # Edges dont have individual f vars except...
-    for arc in G["E"].values():
-        if arc.source.type is NT.R:
-            ƒ = LpVariable(f"ƒ_{arc.name()}", lowBound=0, upBound=arc.𝓬, cat="Integer")
-            arc.pulp_vars["ƒ"] = ƒ
+        v.pulp_vars["ƒ"] = LpVariable(f"ƒ_{v.name()}", lowBound=0, upBound=v.𝓬, cat="Integer")
 
-    # Next we'll create the specific fr vars for each node
+    # Create ƒ ∈ ℕ₀ for each ƒ⁺ arc(𝓻, lodging) such that 0 <= ƒ <= 𝓬
+    for a in G["E"].values():
+        if a.source.type is NT.R:
+            a.pulp_vars["ƒ"] = LpVariable(f"ƒ_{a.name()}", lowBound=0, upBound=a.𝓬, cat="Integer")
+
+    # Create 𝓻 specific ƒ ∈ ℕ₀ vars for each node 0 <= ƒ <= 𝓬
     for v in G["V"].values():
         for 𝓻 in v.𝓻:
-            ƒ_key = f"ƒ𝓻_{𝓻.id}"
-            ƒ_var = LpVariable(
-                f"{ƒ_key}_at_{v.name()}",
+            v.pulp_vars[f"ƒ𝓻_{𝓻.id}"] = LpVariable(
+                f"ƒ𝓻_{𝓻.id}_at_{v.name()}",
                 lowBound=0,
                 upBound=v.𝓬 if v.type in [NT.𝒕, NT.lodging] else 𝓻.𝓬,
                 cat="Binary" if v.isTerminal else "Integer",
             )
-            v.pulp_vars[ƒ_key] = ƒ_var
-    # and the specific fr vars for each edge
-    for arc in G["E"].values():
-        for 𝓻 in set(arc.source.𝓻).intersection(set(arc.destination.𝓻)):
-            ƒ_key = f"ƒ𝓻_{𝓻.id}"
-            ƒ_var = LpVariable(
-                f"{ƒ_key}_on_{arc.name()}",
+
+    # Create 𝓻 specific ƒ ∈ ℕ₀ vars for each arc 0 <= ƒ <= 𝓬
+    for a in G["E"].values():
+        for 𝓻 in set(a.source.𝓻).intersection(set(a.destination.𝓻)):
+            a.pulp_vars[f"ƒ𝓻_{𝓻.id}"] = LpVariable(
+                f"ƒ𝓻_{𝓻.id}_on_{a.name()}",
                 lowBound=0,
-                upBound=arc.𝓬,
-                cat="Binary" if arc.source.type is NT.𝓢 else "Integer",
+                upBound=a.𝓬,  # should this be r.c instead? It'd be tighter.
+                cat="Binary" if a.source.type is NT.𝓢 else "Integer",
             )
-            arc.pulp_vars[ƒ_key] = ƒ_var
 
-    # The only remaining var is the total cost var
-    cost = LpVariable("cost", lowBound=0, upBound=config["budget"])
+    # Create cost ∈ ℕ₀ 0 <= cost <= budget
+    cost = LpVariable("cost", lowBound=0, upBound=config["budget"], cat="Integer")
 
-    # Next we'll add the constraints...
-    # We'll start with the main 'controlling' constraints...
+    # Objective... Maximize total prizes.
+    prizes = [
+        v.𝓻_prizes[𝓻.id]["value"] * v.pulp_vars[f"ƒ𝓻_{𝓻.id}"]
+        for v in G["V"].values()
+        if v.isTerminal
+        for 𝓻 in v.𝓻
+    ]
+    prob += lpSum(prizes), "ObjectiveFunction"
 
-    # Ensure ∑ƒ⁺𝓢𝒓 == ∑ƒ⁻𝓣𝒓
+    # Constraints
+
+    # ∑ƒ⁺𝓢𝒓 == ∑ƒ⁻𝓣𝒓
     prob += G["V"]["𝓢"].pulp_vars["ƒ"] == G["V"]["𝓣"].pulp_vars["ƒ"], "ƒ𝓢_to_ƒ𝓣"
 
-    # Ensure cost <= budget
+    # cost == ∑v(𝑐), cost var is defined with ub = budget
     prob += cost == lpSum(v.cost * v.pulp_vars["𝒙"] for v in G["V"].values()), "TotalCost"
 
-    # Ensure a single 𝓡 -> lodging -> 𝓣 path for each 𝒓.
+    # A single arc(𝒓, lodging) within each 𝓡 group.
     for 𝒓 in G["R"].values():
-        prob += lpSum(arc.pulp_vars["𝒙"] for arc in 𝒓.outbound_arcs) <= 1, f"ƒ⁺𝓡_{𝒓.id}_to_ƒ⁻𝓣"
+        prob += lpSum(a.pulp_vars["𝒙"] for a in 𝒓.outbound_arcs) <= 1, f"ƒ⁺𝓡_{𝒓.id}_to_ƒ⁻𝓣"
 
-    # Now the node indicator constraints...
+    # 𝒙 == 1 if ƒ >= 1 else 0 for all nodes
     for v in G["V"].values():
         ƒ = v.pulp_vars["ƒ"]
-        ƒ_vars = [v for k, v in v.pulp_vars.items() if k.startswith("ƒ𝓻_")]
         𝒙 = v.pulp_vars["𝒙"]
 
+        ƒ_vars = [v for k, v in v.pulp_vars.items() if k.startswith("ƒ𝓻_")]
         ϵ = 1e-5
         M = v.𝓬 + ϵ
 
@@ -111,22 +112,21 @@ def create_problem(config, G):
         prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{v.name()}"
         prob += ƒ <= M * 𝒙, f"↧_{v.name()}"
 
-    # And the few edge indicator constraints...
-    for arc in G["E"].values():
-        if arc.source.type is not NT.R:
-            continue
-        ƒ = arc.pulp_vars["ƒ"]
-        ƒ_vars = [v for k, v in arc.pulp_vars.items() if k.startswith("ƒ𝓻_")]
-        𝒙 = arc.pulp_vars["𝒙"]
+    # 𝒙 == 1 if ƒ >= 1 else 0 for all arc(𝒓, lodging) arcs within each 𝓡 group
+    for a in G["E"].values():
+        if a.source.type is NT.R:
+            ƒ = a.pulp_vars["ƒ"]
+            𝒙 = a.pulp_vars["𝒙"]
 
-        ϵ = 1e-5
-        M = arc.𝓬 + ϵ
+            ƒ_vars = [v for k, v in a.pulp_vars.items() if k.startswith("ƒ𝓻_")]
+            ϵ = 1e-5
+            M = a.𝓬 + ϵ
 
-        prob += ƒ == lpSum(ƒ_vars), f"ƒ_{arc.name()}"
-        prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{arc.name()}"
-        prob += ƒ <= M * 𝒙, f"↧_{arc.name()}"
+            prob += ƒ == lpSum(ƒ_vars), f"ƒ_{a.name()}"
+            prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{a.name()}"
+            prob += ƒ <= M * 𝒙, f"↧_{a.name()}"
 
-    # Then we need to constrain the node's specific fr vars to the ƒ⁻ and ƒ⁺ values by linking them.
+    # ƒ𝓻⁻ == 𝒗(ƒ𝓻) == ƒ𝓻⁺
     def link_node_to_arcs(prob: pulp.LpProblem, v: Node, direction: str, arcs: List[Arc]):
         for ƒ𝓻_key, ƒ𝓻_var in v.pulp_vars.items():
             if ƒ𝓻_key.startswith("ƒ𝓻_"):
@@ -134,8 +134,8 @@ def create_problem(config, G):
                     ƒ𝓻_var
                     == lpSum(
                         var
-                        for arc in arcs
-                        for key, var in arc.pulp_vars.items()
+                        for a in arcs
+                        for key, var in a.pulp_vars.items()
                         if key.startswith("ƒ𝓻_") and (key == ƒ𝓻_key or v.type is NT.lodging)
                     ),
                     f"{direction}_{ƒ𝓻_key}_at_{v.name()}",
@@ -146,15 +146,6 @@ def create_problem(config, G):
             link_node_to_arcs(prob, v, "ƒ⁻", v.inbound_arcs)
         if v.type is not NT.𝓣:
             link_node_to_arcs(prob, v, "ƒ⁺", v.outbound_arcs)
-
-    # Lastly... our objective... Maximize prizes.
-    prizes = [
-        v.𝓻_prizes[𝓻.id]["value"] * v.pulp_vars[f"ƒ𝓻_{𝓻.id}"]
-        for v in G["V"].values()
-        if v.isTerminal
-        for 𝓻 in v.𝓻
-    ]
-    prob += lpSum(prizes), "ObjectiveFunction"
 
     return prob
 
@@ -344,7 +335,7 @@ def main(config):
     # 30 =>       4548       4      2228  98.43%   60453208.26104  58540724.99758     3.27%     1551    478  10047     2420k  1180.3s
     # 50 =>      11002       9      3824  99.40%   86792044.05214  84340234.96241     2.91%     2165    588  10074     6827k  3233.2s
 
-    for budget in [5, 10, 20, 30]:
+    for budget in [501]:
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5

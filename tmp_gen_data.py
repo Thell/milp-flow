@@ -360,6 +360,8 @@ def process_town(
         if capacity == "max_capacity":
             continue
         max_capacity = 1 + int(capacity) + ref_data["lodging_bonus"]
+        if min_capacity > ref_data["waypoint_capacity"]:
+            continue
         lodging_node = get_node(
             nodes,
             f"{root_node.id}_for_{1 + int(capacity) + lodging_bonus}",
