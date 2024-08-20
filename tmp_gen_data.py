@@ -221,9 +221,8 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             capacity = ref_data["waypoint_capacity"]
             cost = ref_data["waypoint_data"][node_id]["CP"]
         case NodeType.𝓡:
-            capacity = (
-                1 + ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
-            )
+            capacity = ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
+            capacity = min(capacity, ref_data["waypoint_capacity"])
             cost = 0
             LoadForRoot = []
         case NodeType.lodging:
@@ -262,6 +261,7 @@ def get_reference_data(config):
         "terminal_values": read_user_json("node_values_per_town.json"),
         "town_to_root": read_workerman_json("town_node_translate.json")["tnk2tk"],
         "root_to_town": read_workerman_json("town_node_translate.json")["tk2tnk"],
+        "root_to_townname": read_workerman_json("warehouse_to_townname.json"),
         "waypoint_data": read_workerman_json("exploration.json"),
         "waypoint_links": read_workerman_json("deck_links.json"),
     }
