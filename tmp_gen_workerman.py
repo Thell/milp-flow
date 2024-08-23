@@ -137,10 +137,10 @@ def print_summary(outputs, counts: Dict[str, Any], costs: Dict[str, int], total_
     outputs = natsort.natsorted(outputs, key=lambda x: (x["warehouse"], x["node"]))
     colalign = ("right", "right", "left", "right", "right")
     print(tabulate(outputs, headers="keys", colalign=colalign))
-    print("Worker Nodes:", counts["origins"], "cost:", costs["origins"])
     print("By Town:\n", tabulate([[k, v] for k, v in counts["by_groups"].items()]))
-    print("Waypoints:", counts["waypoints"], "cost:", costs["waypoints"])
+    print("Worker Nodes:", counts["origins"], "cost:", costs["origins"])
     print("Lodgings cost:", costs["lodgings"])
+    print("Waypoints:", counts["waypoints"], "cost:", costs["waypoints"])
     print("Total Cost:", sum(c for c in costs.values()))
     print("Value:", locale.currency(round(total_value), grouping=True, symbol=True)[:-3])
 
@@ -253,7 +253,7 @@ def main():
     input_files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
 
     for filepath in input_files:
-        if "TMPREWORK_mc501_lb0_tn4_nn5_wc25_gdefault_Restored_409701271.json" not in filepath:
+        if "tmp_slv_TestSTB_mc501_lb0_tn4_nn5_wc25_gdefault_t18k_409701271.json" not in filepath:
             continue
         logging.info("Processing:", filepath.split("/")[-1])
 

@@ -31,19 +31,9 @@ def create_problem(config, G):
     for v in G["V"].values():
         v.pulp_vars["𝒙"] = LpVariable(f"𝒙_{v.name()}", cat="Binary")
 
-    # Create 𝒙 ∈ {0,1} for each 𝓻 indicating if arc(𝓻, lodging) is used in solution.
-    for a in G["E"].values():
-        if a.source.type is NT.R:
-            a.pulp_vars["𝒙"] = LpVariable(f"𝒙_{a.name()}", cat="Binary")
-
     # Create ƒ ∈ ℕ₀ for each node such that 0 <= ƒ <= 𝓬
     for v in G["V"].values():
         v.pulp_vars["ƒ"] = LpVariable(f"ƒ_{v.name()}", lowBound=0, upBound=v.𝓬, cat="Integer")
-
-    # Create ƒ ∈ ℕ₀ for each ƒ⁺ arc(𝓻, lodging) such that 0 <= ƒ <= 𝓬
-    for a in G["E"].values():
-        if a.source.type is NT.R:
-            a.pulp_vars["ƒ"] = LpVariable(f"ƒ_{a.name()}", lowBound=0, upBound=a.𝓬, cat="Integer")
 
     # Create 𝓻 specific ƒ ∈ ℕ₀ vars for each node 0 <= ƒ <= 𝓬
     for v in G["V"].values():
@@ -79,42 +69,27 @@ def create_problem(config, G):
 
     # Constraints
 
-    # ∑ƒ⁺𝓢𝒓 == ∑ƒ⁻𝓣𝒓
-    prob += G["V"]["𝓢"].pulp_vars["ƒ"] == G["V"]["𝓣"].pulp_vars["ƒ"], "ƒ𝓢_to_ƒ𝓣"
+    # ƒ𝒓⁺𝓢 == ƒ𝒓⁻𝓣
+    for 𝓻 in G["R"].values():
+        prob += G["V"]["𝓢"].pulp_vars[f"ƒ𝓻_{𝓻.id}"] == G["V"]["𝓣"].pulp_vars[f"ƒ𝓻_{𝓻.id}"]
 
     # cost == ∑v(𝑐), cost var is defined with ub = budget
     prob += cost == lpSum(v.cost * v.pulp_vars["𝒙"] for v in G["V"].values()), "TotalCost"
 
-    # A single arc(𝒓, lodging) within each 𝓡 group.
+    # A single lodging within each 𝓡 group.
     for 𝒓 in G["R"].values():
-        prob += lpSum(a.pulp_vars["𝒙"] for a in 𝒓.outbound_arcs) <= 1, f"ƒ⁺𝓡_{𝒓.id}_to_ƒ⁻𝓣"
+        vars = []
+        for v in G["V"].values():
+            if v.name().startswith(f"lodging_{r.id}_"):
+                vars.append(v.pulp_vars["𝒙"])
+        prob += lpSum(vars) <= 1, f"ƒ⁺𝓡_{𝒓.id}_to_ƒ⁻𝓣"
 
     # 𝒙 == 1 if ƒ >= 1 else 0 for all nodes
     for v in G["V"].values():
         ƒ = v.pulp_vars["ƒ"]
-        𝒙 = v.pulp_vars["𝒙"]
-
         ƒ_vars = [v for k, v in v.pulp_vars.items() if k.startswith("ƒ𝓻_")]
-        ϵ = 1e-5
-        M = v.𝓬
-
         prob += ƒ == lpSum(ƒ_vars), f"ƒ_{v.name()}"
-        prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{v.name()}"  # Not needed but improves performance
-        prob += ƒ <= M * 𝒙, f"↧_{v.name()}"
-
-    # 𝒙 == 1 if ƒ >= 1 else 0 for all arc(𝒓, lodging) arcs within each 𝓡 group
-    for a in G["E"].values():
-        if a.source.type is NT.R:
-            ƒ = a.pulp_vars["ƒ"]
-            𝒙 = a.pulp_vars["𝒙"]
-
-            ƒ_vars = [v for k, v in a.pulp_vars.items() if k.startswith("ƒ𝓻_")]
-            ϵ = 1e-5
-            M = a.𝓬
-
-            prob += ƒ == lpSum(ƒ_vars), f"ƒ_{a.name()}"
-            prob += ƒ >= ϵ - M * (1 - 𝒙), f"↥_{a.name()}"  # Not needed but improves performance
-            prob += ƒ <= M * 𝒙, f"↧_{a.name()}"
+        prob += ƒ <= v.𝓬 * v.pulp_vars["𝒙"], f"↧_{v.name()}"
 
     # ƒ𝓻⁻ == 𝒗(ƒ𝓻) == ƒ𝓻⁺
     def link_node_to_arcs(prob: pulp.LpProblem, v: Node, direction: str, arcs: List[Arc]):
@@ -325,12 +300,12 @@ def main(config):
     # 30 =>       3213       1      1577  98.44%   61854701.55891  58540724.99759     5.66%     2150    404  10069     1427k   757.7s
     # 50 =>       7459      13      3591  96.99%   87617973.78798  84340234.9624      3.89%     2209    706   9899     4334k  2213.9s
 
-    for budget in [200, 250, 300, 350, 400, 450, 501]:
+    for budget in [501]:
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5
         config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = "TMPREWORK-BestTest"
+        config["solver"]["file_prefix"] = "TMPREWORK-Incumbant"
         config["solver"]["file_suffix"] = "t18k"
         config["solver"]["mips_gap"] = "default"
         config["solver"]["time_limit"] = "18000"

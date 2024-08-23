@@ -351,28 +351,33 @@ def process_town(
     lodging_data = ref_data["lodging_data"][root_id]
     lodging_bonus = ref_data["lodging_bonus"]
 
-    max_capacity = 1 + lodging_data["max_capacity"] + lodging_bonus
-    root_node = get_node(nodes, root_id, NodeType.𝓡, ref_data, capacity=max_capacity)
-    add_arcs(nodes, arcs, town, root_node)
-
-    min_capacity = 0
+    lodgings = [(1 + lodging_bonus, 0)]
     for capacity, lodging_data in lodging_data.items():
         if capacity == "max_capacity":
             continue
-        max_capacity = 1 + int(capacity) + ref_data["lodging_bonus"]
-        if min_capacity > ref_data["waypoint_capacity"]:
-            continue
+        current = (1 + lodging_bonus + int(capacity), lodging_data[0].get("cost"))
+        while lodgings and current[1] <= lodgings[-1][1] and current[0] >= lodgings[-1][0]:
+            lodgings.pop(-1)
+        lodgings.append(current)
+        if current[0] + 1 >= ref_data["waypoint_capacity"]:
+            break
+
+    root_node = get_node(nodes, root_id, NodeType.𝓡, ref_data, capacity=lodgings[-1][0])
+    add_arcs(nodes, arcs, town, root_node)
+
+    min_capacity = 0
+    for capacity, cost in lodgings:
         lodging_node = get_node(
             nodes,
-            f"{root_node.id}_for_{1 + int(capacity) + lodging_bonus}",
+            f"{root_node.id}_for_{capacity}",
             NodeType.lodging,
             ref_data,
-            capacity=max_capacity,
+            capacity=capacity,
             min_capacity=min_capacity,
-            cost=lodging_data[0].get("cost"),
+            cost=cost,
             root=root_node,
         )
-        min_capacity = max_capacity + 1
+        min_capacity = capacity + 1
         add_arcs(nodes, arcs, root_node, lodging_node)
         add_arcs(nodes, arcs, lodging_node, nodes["𝓣"])
 
