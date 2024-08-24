@@ -185,8 +185,7 @@ def process_solution_vars_file(solution_data):
     for k, v in solution_data["solution_vars"].items():
         if k.startswith("ƒ_lodging_") and "_to_" not in k:
             lodging_vars[k.replace("ƒ_", "")] = v
-        elif k.startswith("ƒ𝓻_") and "_to_" not in k and "_at_t_" in k:
-            k.replace("_t_", "")
+        elif "_on_t_" in k:
             origin_vars[k.split("_")[4]] = k.split("_")[1]
         elif k.startswith("ƒ_waypoint") and "_to_" not in k:
             waypoint_vars[k.replace("ƒ_", "")] = v
@@ -253,7 +252,7 @@ def main():
     input_files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
 
     for filepath in input_files:
-        if "TMPREWORK-FlowRework_mc10_lb0_tn4_nn5_wc25_gdefault_t18k_24954483.json" not in filepath:
+        if "TMPREWORK-FlowRework_mc30_lb0_tn4_nn5_wc25_gdefault_t18k_58540725.json" not in filepath:
             continue
         logging.info("Processing:", filepath.split("/")[-1])
 
