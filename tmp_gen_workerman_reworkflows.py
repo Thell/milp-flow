@@ -155,7 +155,7 @@ def generate_graph(graph_data: GraphData, solution_data: Dict[str, Any]):
             continue
 
         u, v = None, None
-        if "ƒ𝓻_" in var_key and "_on_" in var_key:
+        if "fzone_" in var_key and "_on_" in var_key:
             tmp = var_key.split("_on_")
             tmp = tmp[1].split("_to_")
             u = tmp[0]
@@ -183,12 +183,12 @@ def process_solution_vars_file(solution_data):
     origin_vars = {}
     waypoint_vars = {}
     for k, v in solution_data["solution_vars"].items():
-        if k.startswith("ƒ_lodging_") and "_to_" not in k:
-            lodging_vars[k.replace("ƒ_", "")] = v
-        elif "_on_t_" in k:
+        if k.startswith("f_lodging_") and "_to_" not in k:
+            lodging_vars[k.replace("f_", "")] = v
+        elif "_on_plant_" in k:
             origin_vars[k.split("_")[4]] = k.split("_")[1]
-        elif k.startswith("ƒ_waypoint") and "_to_" not in k:
-            waypoint_vars[k.replace("ƒ_", "")] = v
+        elif k.startswith("f_waypoint") and "_to_" not in k:
+            waypoint_vars[k.replace("f_", "")] = v
 
     calculated_value = 0
     distances = []
@@ -203,14 +203,14 @@ def process_solution_vars_file(solution_data):
         town_ids.add(town_id)
         distances.append(all_pairs[town_id][k])
 
-        origin = graph_data["V"][f"t_{k}"]
-        worker_data = origin.𝓻_prizes[v]["worker_data"]
+        origin = graph_data["V"][f"plant_{k}"]
+        worker_data = origin.zone_values[v]["worker_data"]
         user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, int(town_id))
         workerman_user_workers.append(user_worker)
 
-        value = origin.𝓻_prizes[v]["value"]
-        worker = origin.𝓻_prizes[v]["worker"]
-        root_rank = list(origin.𝓻_prizes.keys()).index(v) + 1
+        value = origin.zone_values[v]["value"]
+        worker = origin.zone_values[v]["worker"]
+        root_rank = list(origin.zone_values.keys()).index(v) + 1
         root_ranks.append(root_rank)
 
         origin_cost += origin.cost
@@ -252,7 +252,7 @@ def main():
     input_files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
 
     for filepath in input_files:
-        if "TMPREWORK-FlowRework_mc30_lb0_tn4_nn5_wc25_gdefault_t18k_58540725.json" not in filepath:
+        if "FlowReworked_mc10_lb0_tn4_nn5_wc25_gdefault_t25k_24954483.json" not in filepath:
             continue
         logging.info("Processing:", filepath.split("/")[-1])
 

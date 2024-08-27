@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 from typing import List
 
-
 import natsort
 from pulp import LpVariable, lpSum, LpProblem
 import pulp
@@ -21,85 +20,86 @@ from tmp_gen_data import (
 logger = logging.getLogger(__name__)
 
 
+def get_fr_vars(v, arcs, var_key):
+    return [
+        var
+        for a in arcs
+        for k, var in a.vars.items()
+        if k.startswith("fzone_") and (k == var_key or v.isLodging)
+    ]
+
+
+def link_in_out_flows(prob: LpProblem, v: Node, in_arcs: List[Arc], out_arcs: List[Arc]):
+    f_vars = []
+    for zone in v.zones:
+        key = f"fzone_{zone.id}"
+        inflows = get_fr_vars(v, in_arcs, key)
+        f_vars.append(inflows)
+        outflows = get_fr_vars(v, out_arcs, key)
+        prob += lpSum(inflows) == lpSum(outflows), f"FlowBalanceZone_{key}_at_{v.name()}"
+
+    f = v.vars["f"]
+    prob += f == lpSum(f_vars), f"f_{v.name()}"
+    prob += f <= v.ub * v.vars["x"], f"↧_{v.name()}"
+
+
 def create_problem(config, G):
     """Create the problem and add the variables and constraints."""
-
-    def link_in_out(prob: LpProblem, v: Node, in_arcs: List[Arc], out_arcs: List[Arc]):
-        f_vars = []
-        ƒ = v.pulp_vars["ƒ"]
-        for 𝓻 in v.𝓻:
-            ƒ𝓻_key = f"ƒ𝓻_{𝓻.id}"
-            ins = [
-                var
-                for a in in_arcs
-                for key, var in a.pulp_vars.items()
-                if key.startswith("ƒ𝓻_") and (key == ƒ𝓻_key or v.type is NT.lodging)
-            ]
-            f_vars.append(ins)
-            outs = [
-                var
-                for a in out_arcs
-                for key, var in a.pulp_vars.items()
-                if key.startswith("ƒ𝓻_") and (key == ƒ𝓻_key or v.type is NT.lodging)
-            ]
-            prob += lpSum(ins) == lpSum(outs), f"out_{ƒ𝓻_key}_at_{v.name()}"
-        prob += ƒ == lpSum(f_vars), f"ƒ_{v.name()}"
-        prob += ƒ <= v.𝓬 * v.pulp_vars["𝒙"], f"↧_{v.name()}"
 
     prob = LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
 
     # Variables
+    # Cost var ∈ ℕ₀ 0 <= cost <= budget
+    cost = LpVariable("cost", 0, config["budget"], "Integer")
 
-    # Create cost ∈ ℕ₀ 0 <= cost <= budget
-    cost = LpVariable("cost", lowBound=0, upBound=config["budget"], cat="Integer")
-
-    # Create node variables.
+    # Node vars.
     for v in G["V"].values():
-        # 𝒙 ∈ {0,1} for each node indicating if node is in solution and cost calculation.
-        v.pulp_vars["𝒙"] = LpVariable(f"𝒙_{v.name()}", cat="Binary")
-        # ƒ ∈ ℕ₀ for each node such that 0 <= ƒ <= 𝓬 for cost calculation and performance.
-        v.pulp_vars["ƒ"] = LpVariable(f"ƒ_{v.name()}", lowBound=0, upBound=v.𝓬, cat="Integer")
+        # x ∈ {0,1} for each node indicating if node is in solution and cost calculation.
+        v.vars["x"] = LpVariable(f"x_{v.name()}", cat="Binary")
+        # f ∈ ℕ₀ for each node such that 0 <= f <= ub for cost calculation and performance.
+        v.vars["f"] = LpVariable(f"f_{v.name()}", 0, v.ub, "Integer")
 
-    # Create edge variables.
+    # Edge vars.
     for a in G["E"].values():
-        # 𝓡 group specific ƒ ∈ ℕ₀ vars for each arc 0 <= ƒ <= 𝓬
-        for 𝓻 in set(a.source.𝓻).intersection(set(a.destination.𝓻)):
-            key = f"ƒ𝓻_{𝓻.id}"
-            ub = a.𝓬 if a.source.type in [NT.𝓡, NT.𝓢, NT.𝓣, NT.lodging] else 𝓻.𝓬
-            cat = "Binary" if a.source.type in [NT.𝓢, NT.t] else "Integer"
-            a.pulp_vars[key] = LpVariable(f"{key}_on_{a.name()}", 0, ub, cat)
+        # 𝓡 group specific f ∈ ℕ₀ vars for each arc 0 <= f <= ub
+        for zone in set(a.source.zones).intersection(set(a.destination.zones)):
+            key = f"fzone_{zone.id}"
+            ub = a.ub if a.source.type in [NT.𝓡, NT.𝓢, NT.𝓣, NT.lodge] else zone.ub
+            cat = "Binary" if a.source.type in [NT.𝓢, NT.plant] else "Integer"
+            a.vars[key] = LpVariable(f"{key}_on_{a.name()}", 0, ub, cat)
 
     # Objective
-
-    # Maximize total prizes ∑v(p)𝒙 for 𝓡 group specific values in all binary terminal inflows.
-    prizes = []
+    # Maximize total value ∑v(v)x for 𝓡 group specific values in all binary plant inflows.
+    values = []
     for v in G["V"].values():
-        if v.isTerminal:
-            for 𝓻 in v.𝓻:
+        if v.isPlant:
+            for zone in v.zones:
                 for a in v.inbound_arcs:
-                    prizes.append(round(v.𝓻_prizes[𝓻.id]["value"], 2) * a.pulp_vars[f"ƒ𝓻_{𝓻.id}"])
-    prob += lpSum(prizes), "ObjectiveFunction"
+                    values.append(
+                        round(v.zone_values[zone.id]["value"], 2) * a.vars[f"fzone_{zone.id}"]
+                    )
+    prob += lpSum(values), "ObjectiveFunction"
 
     # Constraints
 
-    # Cost var is defined with ub = budget so this is ∑v(𝑐)𝒙 <= budget
-    prob += cost == lpSum(v.cost * v.pulp_vars["𝒙"] for v in G["V"].values()), "TotalCost"
+    # Cost var is defined with ub = budget so this is ∑v(𝑐)x <= budget
+    prob += cost == lpSum(v.cost * v.vars["x"] for v in G["V"].values()), "TotalCost"
 
-    # A single lodging within each 𝓡 group.
+    # A single lodge within each 𝓡 group.
     for 𝒓 in G["R"].values():
         vars = []
         for v in G["V"].values():
-            if v.name().startswith(f"lodging_{r.id}_"):
-                vars.append(v.pulp_vars["𝒙"])
+            if v.name().startswith(f"lodge_{r.id}_"):
+                vars.append(v.vars["x"])
         prob += lpSum(vars) <= 1, f"Lodge_{𝒓.id}"
 
-    # 𝓡 group specific ƒ⁻ == ƒ⁺
+    # 𝓡 group specific f⁻ == f⁺
     for v in G["V"].values():
         if v.type not in [NT.𝓢, NT.𝓣]:
-            link_in_out(prob, v, v.inbound_arcs, v.outbound_arcs)
+            link_in_out_flows(prob, v, v.inbound_arcs, v.outbound_arcs)
 
-    # 𝓡 group specific ƒ⁻𝓣 == ƒ⁺𝓢
-    link_in_out(prob, G["V"]["𝓣"], G["V"]["𝓣"].inbound_arcs, G["V"]["𝓢"].outbound_arcs)
+    # 𝓡 group specific f⁻𝓣 == f⁺𝓢
+    link_in_out_flows(prob, G["V"]["𝓣"], G["V"]["𝓣"].inbound_arcs, G["V"]["𝓢"].outbound_arcs)
 
     return prob
 
@@ -140,7 +140,7 @@ def config_filename(config):
     lodging_bonus = config["lodging_bonus"]
     top_n = config["top_n"]
     nearest_n = config["nearest_n"]
-    waypoint_capacity = config["waypoint_capacity"]
+    waypoint_ub = config["waypoint_ub"]
     prefix = config["solver"]["file_prefix"]
     suffix = config["solver"]["file_suffix"]
     mips_gap = config["solver"]["mips_gap"]
@@ -152,7 +152,7 @@ def config_filename(config):
     if suffix:
         suffix = f"_{suffix}"
 
-    filename = f"{prefix}mc{budget}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_capacity}_g{mips_gap}{suffix}"
+    filename = f"{prefix}mc{budget}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_ub}_g{mips_gap}{suffix}"
     return filename
 
 
@@ -161,7 +161,7 @@ def print_solving_info_header(config):
     lodging_bonus = config["lodging_bonus"]
     top_n = config["top_n"]
     nearest_n = config["nearest_n"]
-    waypoint_capacity = config["waypoint_capacity"]
+    waypoint_ub = config["waypoint_ub"]
     mips_tol = config["solver"]["mips_tol"]
     mips_gap = config["solver"]["mips_gap"]
     if mips_gap == "auto":
@@ -170,7 +170,7 @@ def print_solving_info_header(config):
     logging.info(
         f"\n===================================================="
         f"\nSolving: budget: {budget}, Lodging_bonus: {lodging_bonus} top_n: {top_n},"
-        f" nearest_n: {nearest_n}, capacity={waypoint_capacity}"
+        f" nearest_n: {nearest_n}, ub={waypoint_ub}"
         f"\nUsing threads=16 and mip_feasibility_tolerance={mips_tol}, gap: {mips_gap}"
     )
 
@@ -192,12 +192,17 @@ def extract_solution(config, prob, graph_data):
                 }
 
     calculated_cost = 0
+    calculated_value = 0
     outputs = []
     arc_loads = []
     waypoint_loads = []
     for k, v in solution_vars.items():
-        if k.startswith("ƒ_"):
-            kname = k.replace("ƒ_", "")
+        if k.startswith("fzone") and "_on_plant_" in k:
+            tokens = k.split("_")
+            zone, plant = (tokens[1], tokens[4])
+            calculated_value += round(graph_data["V"][f"plant_{plant}"].zone_values[zone]["value"])
+        if k.startswith("f_"):
+            kname = k.replace("f_", "")
             if "_to_" in k:
                 # An arc
                 𝓢, destination = kname.split("_to_")
@@ -227,15 +232,12 @@ def extract_solution(config, prob, graph_data):
 
     logging.info(
         f"\n"
-        # f"                 ƒ_𝓢: {solution_vars["ƒ_𝓢"]["value"]}\n"
-        # f"                 ƒ_𝓣: {solution_vars["ƒ_𝓣"]["value"]}\n"
-        f"                 |𝒕|: {len([x for x in outputs if x.startswith("Node(name: t_")])}\n"
+        f"            # plants: {len([x for x in outputs if x.startswith("Node(name: plant_")])}\n"
         f"              budget: {config["budget"]}\n"
-        f"           Actual ∑𝑐: {calculated_cost}\n"
-        f"               LP ∑𝑐: {solver_cost}\n"
-        f"              ∑prize: {round(solver_value)}\n"
-        # f"      Max waypoint ƒ: {max(waypoint_loads, key=itemgetter(1))}\n"
-        # f"           Max arc ƒ: {max(arc_loads, key=itemgetter(1))}\n"
+        f"             LP cost: {solver_cost}\n"
+        f"         Actual cost: {calculated_cost}\n"
+        f"            LP value: {round(solver_value)}\n"
+        f"        Actual value: {calculated_value}\n"
     )
     if gt0lt1_vars:
         logging.warning(f"WARNING: 0 < x < 1 vars count: {len(gt0lt1_vars)}")
@@ -270,16 +272,12 @@ def empire_solver(config):
         json.dump(out_data, file, indent=4)
     print("Solution vars written to:", filepath)
 
-    # assert (
-    #     prob.variablesDict()["ƒ_𝓢"].value() == prob.variablesDict()["ƒ_𝓣"].value()
-    # ), "Load value mismatch: 𝓢 != 𝓣."
-
 
 def main(config):
     """
     top_n: count of supply nodes per root by value (index based, zero=1)
     nearest_n: count of nearest roots available on waypoint nodes (index based, zero=1)
-    waypoint_capacity: max loads on a waypoint
+    waypoint_ub: max loads on a waypoint
     """
 
     # for budget in [10, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
@@ -293,11 +291,11 @@ def main(config):
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5
-        config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = "TMPREWORK-FlowRework"
-        config["solver"]["file_suffix"] = "t18k"
+        config["waypoint_ub"] = 25
+        config["solver"]["file_prefix"] = "FlowReworked"
+        config["solver"]["file_suffix"] = "t25k"
         config["solver"]["mips_gap"] = "default"
-        config["solver"]["time_limit"] = "18000"
+        config["solver"]["time_limit"] = "25000"
         empire_solver(config)
 
 
