@@ -1,9 +1,9 @@
 {
-    "max_cost": 30,
+    "budget": 30,
     "lodging_bonus": 0,
-    "top_n": 3,
+    "top_n": 4,
     "nearest_n": 5,
-    "waypoint_capacity": 15,
+    "waypoint_ub": 25,
     "solve_log_level": "INFO",
     "data_log_level": "INFO",
     "solver": {
