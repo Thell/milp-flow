@@ -1,12 +1,3 @@
-/home/thell/milp-flow/.venv/bin/python /home/thell/milp-flow/tmp_solver_rework_flow.py
- .venv  ~  milp-flow   main  11⬆  6✎  3+  1⚑  $  
-$ /home/thell/milp-flow/.venv/bin/python /home/thell/milp-flow/tmp_solver_rework_flow.py
-nodes: 1001
-arcs: 2182
-INFO:root:
-====================================================
-Solving: budget: 501, Lodging_bonus: 0 top_n: 4, nearest_n: 5, capacity=25
-Using threads=16 and mip_feasibility_tolerance=1e-06, gap: default
 Running HiGHS 1.7.2 (git hash: 47a31db3d): Copyright (c) 2024 HiGHS under MIT licence terms
 Number of BV entries in BOUNDS section is 3458
 MIP  MaximizeEmpireValue-pulp has 5761 rows; 9907 cols; 27863 nonzeros; 9907 integer variables
@@ -1620,13 +1611,3 @@ Solving report
                     2389206 (separation)
                     8312358 (heuristics)
 Writing the solution to MaximizeEmpireValue-pulp.sol
-Solution moved to: /home/thell/milp-flow/highs_output/solutions/TMPREWORK-FlowRework_mc501_lb0_tn4_nn5_wc25_gdefault_t18k.sol
-INFO:root:
-                 |𝒕|: 126
-              budget: 501
-           Actual ∑𝑐: 501
-               LP ∑𝑐: 501
-              ∑prize: 409701271
-
-WARNING:root:WARNING: 0 < x < 1 vars count: 137
-Solution vars written to: /home/thell/milp-flow/highs_output/solution-vars/TMPREWORK-FlowRework_mc501_lb0_tn4_nn5_wc25_gdefault_t18k_409701271.json
