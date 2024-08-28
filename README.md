@@ -1,4 +1,14 @@
 # CONSTRUCTION ZONE
+
+Current testing workflow:
+
+- edit `market.json`
+- run `generate_optimized_node_values.py`
+- run `empire_solver.py`
+- run `generate_workerman_json.py` against new output in `highs_output/solution-vars`
+- import the newly generated output from `workerman_output` into workerman
+
+
 ----
 
 ## Goal: Solve Minimum Cost Multi-Commodity Flow Problem
