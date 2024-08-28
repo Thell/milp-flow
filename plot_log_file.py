@@ -57,9 +57,6 @@ def parse_highs_log(log_file_path):
     return time_values, best_bound_values, best_sol_values, in_queue_values, expl_values, gap_values
 
 
-import matplotlib.pyplot as plt
-
-
 def plot_highs_log(
     time_values, best_bound_values, best_sol_values, in_queue_values, expl_values, gap_values
 ):
