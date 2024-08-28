@@ -85,6 +85,35 @@ enabled workers from all cities + unused demand == total production node count.
 (For debugging, this ensures our flow is correct up to the Network Nodes exit.)
 - Sink: Impose the sink count == the supply count at source.
 
+## A Better Representation
+
+Instance:  
+ Budget 𝐵: 𝐵 → ℕ  
+ Graph 𝑮(𝑉|𝐸)  
+with  
+ vertex costs 𝑐 : 𝑉 → ℕ  
+ terminals 𝑡 : 𝑡 ∈ 𝑉  
+ terminal roots 𝑟 : 𝑟₁, …, 𝑟ₙ, 𝑟 ∈ 𝑉  
+ terminal prizes 𝑝ₜᵣ : 𝑝ₜᵣ₁, …, 𝑝ₜᵣₙ 𝑝 → ℝ⁺  
+ root group size limits 𝑙ᵣ : 𝑙ᵣ₁, …, 𝑙ᵣₙ, 𝑙 → ℕ  
+ root group size costs 𝑔ᵣ(𝑥) : {1,2,…,𝑙ᵣ} → ℕ, 𝑥 = |𝑟ₙ|
+
+Solution:  
+ Forest 𝐹 ⊆ 𝑉
+
+Objective:  
+ Maximize: ∑𝑝ₜᵣ - ∑𝑐ᵥ - ∑𝑔ᵣₙ(𝑥), ∀ (𝑡,𝑟) ∈ 𝐹, ∀ 𝑉 ∈ 𝐹, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ  
+or  
+ Minimize: ∑𝑝ₜᵣ + ∑𝑐ᵥ + ∑𝑔ᵣₙ(𝑥) ∀ (𝑡,r) ∉ 𝐹, ∀ 𝑉 ∈ 𝐹, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ  
+ where: 𝑟 of (𝑡,𝑟) ↦ max(𝑝ₜᵣ₁, …, 𝑝ₜᵣₙ)
+
+Subject to:  
+ ∑𝑐ᵥ + ∑𝑔ᵣₙ(𝑥) ≤ 𝐵, ∀ 𝑉 ∈ 𝐹, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ  
+ ∣𝐹 ∩ 𝑟ₙ∣ ≤ 𝑙ᵣₙ, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ
+​
+Inbound and outbound flows ƒ⁻ ƒ⁺ , respectively.  δ⁻  δ⁺
+
+𝓚
 
 ## Data Prep
 
