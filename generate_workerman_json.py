@@ -132,31 +132,39 @@ def order_workerman_workers(graph, user_workers: list[Dict[str, Any]], solution_
     return ordered_workers
 
 
-def print_summary(outputs, counts: Dict[str, int], costs: Dict[str, int], total_value: float):
+def print_summary(outputs, counts: Dict[str, Any], costs: Dict[str, int], total_value: float):
     """Print town, origin, worker summary report."""
     outputs = natsort.natsorted(outputs, key=lambda x: (x["warehouse"], x["node"]))
     colalign = ("right", "right", "left", "right", "right")
     print(tabulate(outputs, headers="keys", colalign=colalign))
+    print("By Town:\n", tabulate([[k, v] for k, v in counts["by_groups"].items()]))
     print("Worker Nodes:", counts["origins"], "cost:", costs["origins"])
-    print("Waypoints:", counts["waypoints"], "cost:", costs["waypoints"])
     print("Lodgings cost:", costs["lodgings"])
+    print("Waypoints:", counts["waypoints"], "cost:", costs["waypoints"])
     print("Total Cost:", sum(c for c in costs.values()))
     print("Value:", locale.currency(round(total_value), grouping=True, symbol=True)[:-3])
 
 
 def generate_graph(graph_data: GraphData, solution_data: Dict[str, Any]):
     graph = nx.DiGraph()
-    exclude_keywords = ["lodging", "supply", "source", "sink", "warehouse"]
+    exclude_keywords = ["lodging", "𝓢", "𝓣", "_R_"]
 
     for var_key in solution_data["solution_vars"].keys():
-        is_edge = "_to_" in var_key
         exclude = any(keyword in var_key for keyword in exclude_keywords)
-        if not var_key.startswith("HasLoad_") or not is_edge or exclude:
+        if exclude:
             continue
 
-        source, destination = var_key.split("_to_")
-        source = source.replace("HasLoad_", "")
-        weight = graph_data["nodes"][source].cost
+        u, v = None, None
+        if "ƒ𝓻_" in var_key and "_on_" in var_key:
+            tmp = var_key.split("_on_")
+            tmp = tmp[1].split("_to_")
+            u = tmp[0]
+            v = tmp[1]
+        else:
+            continue
+
+        source, destination = u, v
+        weight = graph_data["V"][source].cost
         graph.add_edge(destination.split("_")[1], source.split("_")[1], weight=weight)
 
     return graph
@@ -175,12 +183,12 @@ def process_solution_vars_file(solution_data):
     origin_vars = {}
     waypoint_vars = {}
     for k, v in solution_data["solution_vars"].items():
-        if k.startswith("Load_lodging") and "_to_" not in k:
-            lodging_vars[k.replace("Load_", "")] = v
-        elif k.startswith("LoadForWarehouse") and "_to_" not in k and "_at_origin_" in k:
+        if k.startswith("ƒ_lodging_") and "_to_" not in k:
+            lodging_vars[k.replace("ƒ_", "")] = v
+        elif "_on_t_" in k:
             origin_vars[k.split("_")[4]] = k.split("_")[1]
-        elif k.startswith("Load_waypoint") and "_to_" not in k:
-            waypoint_vars[k.replace("Load_", "")] = v
+        elif k.startswith("ƒ_waypoint") and "_to_" not in k:
+            waypoint_vars[k.replace("ƒ_", "")] = v
 
     calculated_value = 0
     distances = []
@@ -188,22 +196,22 @@ def process_solution_vars_file(solution_data):
     outputs = []
     town_ids = set()
     workerman_user_workers = []
-    warehouse_ranks = []
+    root_ranks = []
     for k, v in origin_vars.items():
-        town_id = ref_data["warehouse_to_town"][v]
+        town_id = ref_data["root_to_town"][v]
 
         town_ids.add(town_id)
         distances.append(all_pairs[town_id][k])
 
-        origin = graph_data["nodes"][f"origin_{k}"]
-        worker_data = origin.warehouse_values[v]["worker_data"]
+        origin = graph_data["V"][f"t_{k}"]
+        worker_data = origin.𝓻_prizes[v]["worker_data"]
         user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, int(town_id))
         workerman_user_workers.append(user_worker)
 
-        value = origin.warehouse_values[v]["value"]
-        worker = origin.warehouse_values[v]["worker"]
-        warehouse_rank = list(origin.warehouse_values.keys()).index(v) + 1
-        warehouse_ranks.append(warehouse_rank)
+        value = origin.𝓻_prizes[v]["value"]
+        worker = origin.𝓻_prizes[v]["worker"]
+        root_rank = list(origin.𝓻_prizes.keys()).index(v) + 1
+        root_ranks.append(root_rank)
 
         origin_cost += origin.cost
         calculated_value += value
@@ -213,18 +221,24 @@ def process_solution_vars_file(solution_data):
             "node": origin.id,
             "worker": worker,
             "value": locale.currency(round(value), grouping=True, symbol=True)[:-3],
-            "value_rank": warehouse_rank,
+            "value_rank": root_rank,
         }
         outputs.append(output)
 
-    counts = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
+    counts: Dict[str, Any] = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
+    by_groups = {
+        str(ref_data["root_to_townname"]["name"][k]): v
+        for k, v in Counter(origin_vars.values()).most_common()
+    }
+    counts["by_groups"] = by_groups
+
     costs = {
-        "lodgings": sum(graph_data["nodes"][k].cost for k in lodging_vars.keys()),
+        "lodgings": sum(graph_data["V"][k].cost for k in lodging_vars.keys()),
         "origins": origin_cost,
-        "waypoints": sum(graph_data["nodes"][k].cost for k in waypoint_vars.keys()),
+        "waypoints": sum(graph_data["V"][k].cost for k in waypoint_vars.keys()),
     }
     print_summary(outputs, counts, costs, calculated_value)
-    print("Warehouse rank counts:", {k: v for k, v in Counter(warehouse_ranks).items()})
+    print("Warehouse rank counts:", {k: v for k, v in Counter(root_ranks).items()})
 
     lodging_bonuses = get_workerman_lodging_bonuses(solution_data["config"]["lodging_bonus"])
     workerman_ordered_workers = order_workerman_workers(graph, workerman_user_workers, distances)
@@ -238,7 +252,7 @@ def main():
     input_files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
 
     for filepath in input_files:
-        if "NoCostObj_mc501_lb3_tn4_nn5_wc25" not in filepath:
+        if "TMPREWORK-FlowRework_mc30_lb0_tn4_nn5_wc25_gdefault_t18k_58540725.json" not in filepath:
             continue
         logging.info("Processing:", filepath.split("/")[-1])
 
