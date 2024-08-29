@@ -419,7 +419,7 @@ def generate_empire_data(config):
     arcs: Dict[tuple[str, str], Arc] = {}
     nodes: Dict[str, Node] = {}
     ref_data = get_reference_data(config)
-    ref_data["waypoint_capacity"] = min(config["waypoint_capacity"], config["budget"])
+    ref_data["waypoint_capacity"] = min(config["waypoint_ub"], config["budget"])
 
     get_node(nodes, "𝓢", NodeType.𝓢, ref_data)
     get_node(nodes, "𝓣", NodeType.𝓣, ref_data)
