@@ -1,4 +1,5 @@
 import re
+import math
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -77,7 +78,7 @@ def plot_highs_log(
     ax1.tick_params(axis="y", labelcolor=best_bound_colour)
 
     # Limit y-axis to the range between min and max of the non-NaN values
-    valid_gap_index = next(i for i, gap in enumerate(gap_values) if not np.isnan(gap))
+    valid_gap_index = next(i for i, gap in enumerate(gap_values) if not np.isnan(gap) and gap <= 100)
     min_y = min(best_bound_values[valid_gap_index], best_sol_values[valid_gap_index])
     max_y = max(best_bound_values[valid_gap_index], best_sol_values[valid_gap_index])
     padding = (max_y - min_y) * 0.1
@@ -102,7 +103,9 @@ def plot_highs_log(
 
     # Plot vertical hash lines where Best Solution changes
     for i in range(1, len(best_sol_values)):
-        if best_sol_values[i] != best_sol_values[i - 1]:  # Change detected
+        if (best_sol_values[i] != best_sol_values[i - 1]) and not (
+            math.isnan(best_sol_values[i])
+        ):  # Change detected
             ax1.axvline(x=time_values[i], color="grey", linestyle="--", linewidth=0.5)
 
     # Shift plot area left to make room on the right for the three y-axis labels.
