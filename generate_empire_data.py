@@ -450,7 +450,7 @@ def generate_empire_data(config):
 
 def validate_config(config):
     assert config["budget"] >= 1, "A budget is required."
-    assert config["lodging_bonus"] >= 0 and config["lodging_bonus"] <= 3, "Limit of 3 bonus lodging."
+    assert config["lodging_bonus"] >= 0 and config["lodging_bonus"] <= 5, "Limit of 3 bonus lodging."
     assert (
         config["top_n"] >= 1 and config["top_n"] <= 24
     ), "Top n valued towns per worker node are required."
