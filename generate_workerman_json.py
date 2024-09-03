@@ -147,7 +147,7 @@ def print_summary(outputs, counts: Dict[str, Any], costs: Dict[str, int], total_
 
 def generate_graph(graph_data: GraphData, solution_data: Dict[str, Any]):
     graph = nx.DiGraph()
-    exclude_keywords = ["lodging", "𝓢", "𝓣", "_R_"]
+    exclude_keywords = ["lodging", "𝓢", "𝓣"]
 
     for var_key in solution_data["solution_vars"].keys():
         exclude = any(keyword in var_key for keyword in exclude_keywords)
@@ -155,7 +155,7 @@ def generate_graph(graph_data: GraphData, solution_data: Dict[str, Any]):
             continue
 
         u, v = None, None
-        if "ƒ𝓻_" in var_key and "_on_" in var_key:
+        if "groupflow_" in var_key and "_on_" in var_key:
             tmp = var_key.split("_on_")
             tmp = tmp[1].split("_to_")
             u = tmp[0]
@@ -183,12 +183,12 @@ def process_solution_vars_file(solution_data):
     origin_vars = {}
     waypoint_vars = {}
     for k, v in solution_data["solution_vars"].items():
-        if k.startswith("ƒ_lodging_") and "_to_" not in k:
-            lodging_vars[k.replace("ƒ_", "")] = v
-        elif "_on_t_" in k:
+        if k.startswith("flow_lodging_") and "_to_" not in k:
+            lodging_vars[k.replace("flow_", "")] = v
+        elif "_on_plant_" in k:
             origin_vars[k.split("_")[4]] = k.split("_")[1]
-        elif k.startswith("ƒ_waypoint") and "_to_" not in k:
-            waypoint_vars[k.replace("ƒ_", "")] = v
+        elif k.startswith("flow_waypoint") and "_to_" not in k:
+            waypoint_vars[k.replace("flow_", "")] = v
 
     calculated_value = 0
     distances = []
@@ -198,19 +198,19 @@ def process_solution_vars_file(solution_data):
     workerman_user_workers = []
     root_ranks = []
     for k, v in origin_vars.items():
-        town_id = ref_data["root_to_town"][v]
+        town_id = ref_data["group_to_town"][v]
 
         town_ids.add(town_id)
         distances.append(all_pairs[town_id][k])
 
-        origin = graph_data["V"][f"t_{k}"]
-        worker_data = origin.𝓻_prizes[v]["worker_data"]
+        origin = graph_data["V"][f"plant_{k}"]
+        worker_data = origin.group_prizes[v]["worker_data"]
         user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, int(town_id))
         workerman_user_workers.append(user_worker)
 
-        value = origin.𝓻_prizes[v]["value"]
-        worker = origin.𝓻_prizes[v]["worker"]
-        root_rank = list(origin.𝓻_prizes.keys()).index(v) + 1
+        value = origin.group_prizes[v]["value"]
+        worker = origin.group_prizes[v]["worker"]
+        root_rank = list(origin.group_prizes.keys()).index(v) + 1
         root_ranks.append(root_rank)
 
         origin_cost += origin.cost
@@ -227,7 +227,7 @@ def process_solution_vars_file(solution_data):
 
     counts: Dict[str, Any] = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
     by_groups = {
-        str(ref_data["root_to_townname"]["name"][k]): v
+        str(ref_data["group_to_townname"]["name"][k]): v
         for k, v in Counter(origin_vars.values()).most_common()
     }
     counts["by_groups"] = by_groups
@@ -252,7 +252,10 @@ def main():
     input_files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
 
     for filepath in input_files:
-        if "TMPREWORK-FlowRework_mc30_lb0_tn4_nn5_wc25_gdefault_t18k_58540725.json" not in filepath:
+        if (
+            "unicode_cleanup_mc10_lb0_tn4_nn5_wc25_gdefault_fixedlodgingtest_24954483.json"
+            not in filepath
+        ):
             continue
         logging.info("Processing:", filepath.split("/")[-1])
 

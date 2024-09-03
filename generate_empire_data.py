@@ -18,15 +18,15 @@ logger = logging.getLogger(__name__)
 class GraphData(TypedDict):
     V: Dict[str, Node]
     E: Dict[tuple[str, str], Arc]
-    R: Dict[str, Node]
+    G: Dict[str, Node]
 
 
 class NodeType(IntEnum):
     𝓢 = auto()
-    𝒕 = auto()
+    plant = auto()
     waypoint = auto()
     town = auto()
-    𝓡 = auto()
+    group = auto()
     lodging = auto()
     𝓣 = auto()
 
@@ -41,23 +41,26 @@ class Node:
         self,
         id: str,
         type: NodeType,
-        capacity: int,
-        min_capacity: int = 0,
+        ub: int,
+        lb: int = 0,
         cost: int = 0,
-        𝓻: List[Node] = [],
+        groups: List[Node] = [],
     ):
         self.id = id
         self.type = type
-        self.𝓬 = capacity
-        self.min_capacity = min_capacity
+        self.ub = ub
+        self.lb = lb
         self.cost = cost
-        self.𝓻_prizes: Dict[str, Dict[str, Any]] = {}
-        self.𝓻 = 𝓻 if 𝓻 else []
+        self.group_prizes: Dict[str, Dict[str, Any]] = {}
+        self.groups = groups if groups else []
         self.key = self.name()
         self.inbound_arcs: List[Arc] = []
         self.outbound_arcs: List[Arc] = []
-        self.pulp_vars = {}
-        self.isTerminal = type == NodeType.t
+        self.vars = {}
+        self.isPlant = type == NodeType.plant
+        self.isLodging = type == NodeType.lodging
+        self.isTown = type == NodeType.town
+        self.isWaypoint = type == NodeType.waypoint
 
     def name(self) -> str:
         if self.type in [NodeType.𝓢, NodeType.𝓣]:
@@ -70,23 +73,23 @@ class Node:
             "name": self.name(),
             "id": self.id,
             "type": self.type.name.lower(),
-            "capacity": self.𝓬,
-            "min_capacity": self.𝓬,
+            "ub": self.ub,
+            "lb": self.ub,
             "cost": self.cost,
-            "root_values": self.𝓻_prizes,
-            "LoadForRoot": [],
+            "group_prizes": self.group_prizes,
+            "groups": [],
             "inbound_arcs": [arc.key for arc in self.inbound_arcs],
             "outbound_arcs": [arc.key for arc in self.outbound_arcs],
         }
-        for node in self.𝓻:
+        for node in self.groups:
             if node is self:
-                obj_dict["LoadForRoot"].append("self")
+                obj_dict["groups"].append("self")
             else:
-                obj_dict["LoadForRoot"].append(node.name())
+                obj_dict["groups"].append(node.name())
         return obj_dict
 
     def __repr__(self) -> str:
-        return f"Node(name: {self.name()}, capacity: {self.𝓬}, min_capacity: {self.min_capacity}, cost: {self.cost}, value: {self.𝓻_prizes})"
+        return f"Node(name: {self.name()}, ub: {self.ub}, lb: {self.lb}, cost: {self.cost}, value: {self.group_prizes})"
 
     def __eq__(self, other) -> bool:
         return self.name() == other.name()
@@ -96,33 +99,33 @@ class Node:
 
 
 class Arc:
-    def __init__(self, source: Node, destination: Node, capacity: int, cost: int = 0):
+    def __init__(self, source: Node, destination: Node, ub: int, cost: int = 0):
         self.source = source
         self.destination = destination
-        self.𝓬 = capacity
+        self.ub = ub
         self.cost = cost
         self.key = (source.name(), destination.name())
         self.type = (source.type, destination.type)
-        self.pulp_vars = {}
+        self.vars = {}
 
     def as_dict(self) -> Dict[str, Any]:
         return {
             "key": self.key,
             "name": self.name(),
-            "capacity": self.𝓬,
+            "ub": self.ub,
             "type": self.type,
             "source": self.source.name(),
             "destination": self.destination.name(),
         }
 
     def allowable_loads(self) -> set[Node]:
-        return set(self.source.𝓻).intersection(set(self.destination.𝓻))
+        return set(self.source.groups).intersection(set(self.destination.groups))
 
     def name(self) -> str:
         return f"{self.source.name()}_to_{self.destination.name()}"
 
     def __repr__(self) -> str:
-        return f"arc({self.source.name()} -> {self.destination.name()}, capacity: {self.𝓬})"
+        return f"arc({self.source.name()} -> {self.destination.name()}, ub: {self.ub})"
 
     def __eq__(self, other) -> bool:
         return (self.source, self.destination) == (other.source, other.destination)
@@ -138,30 +141,30 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
         node_a, node_b = node_b, node_a
 
     arc_configurations = {
-        (NodeType.𝓢, NodeType.𝒕): (1, 0),
-        (NodeType.𝒕, NodeType.waypoint): (1, 0),
-        (NodeType.𝒕, NodeType.town): (1, 0),
-        (NodeType.waypoint, NodeType.waypoint): (node_b.𝓬, node_a.𝓬),
-        (NodeType.waypoint, NodeType.town): (node_b.𝓬, node_a.𝓬),
-        (NodeType.town, NodeType.town): (node_b.𝓬, node_a.𝓬),
-        (NodeType.town, NodeType.𝓡): (node_b.𝓬, 0),
-        (NodeType.𝓡, NodeType.lodging): (node_b.𝓬, 0),
-        (NodeType.lodging, NodeType.𝓣): (node_a.𝓬, 0),
+        (NodeType.𝓢, NodeType.plant): (1, 0),
+        (NodeType.plant, NodeType.waypoint): (1, 0),
+        (NodeType.plant, NodeType.town): (1, 0),
+        (NodeType.waypoint, NodeType.waypoint): (node_b.ub, node_a.ub),
+        (NodeType.waypoint, NodeType.town): (node_b.ub, node_a.ub),
+        (NodeType.town, NodeType.town): (node_b.ub, node_a.ub),
+        (NodeType.town, NodeType.group): (node_b.ub, 0),
+        (NodeType.group, NodeType.lodging): (node_b.ub, 0),
+        (NodeType.lodging, NodeType.𝓣): (node_a.ub, 0),
     }
 
-    capacity, reverse_capacity = arc_configurations.get((node_a.type, node_b.type), (1, 0))
+    ub, reverse_ub = arc_configurations.get((node_a.type, node_b.type), (1, 0))
 
-    arc_a = Arc(node_a, node_b, capacity=capacity)
-    arc_b = Arc(node_b, node_a, capacity=reverse_capacity)
+    arc_a = Arc(node_a, node_b, ub=ub)
+    arc_b = Arc(node_b, node_a, ub=reverse_ub)
 
     for arc in [arc_a, arc_b]:
-        if arc.key not in arcs and arc.𝓬 > 0:
+        if arc.key not in arcs and arc.ub > 0:
             arcs[arc.key] = arc
             nodes[arc.source.key].outbound_arcs.append(arc)
             nodes[arc.destination.key].inbound_arcs.append(arc)
 
             if arc.destination.type is NodeType.lodging:
-                arc.destination.𝓻 = [arc.source]
+                arc.destination.groups = [arc.source]
 
 
 def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
@@ -172,9 +175,9 @@ def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
     if node_id in ref_data["towns"]:
         return NodeType.town
     if node_id in ref_data["all_plantzones"]:
-        if node_id not in ref_data["terminals"]:
+        if node_id not in ref_data["plants"]:
             return NodeType.INVALID
-        return NodeType.𝒕
+        return NodeType.plant
     return NodeType.waypoint
 
 
@@ -202,84 +205,82 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     """
     Generate, add and return node based on NodeType.
 
-    kwargs `terminal` and `root` are required for supply nodes.
-    kwargs `capacity` is required for root nodes.
-    kwargs `capacity`, `cost` and `root` are required for lodging nodes.
+    kwargs `plant` and `group` are required for supply nodes.
+    kwargs `ub` is required for group nodes.
+    kwargs `ub`, `cost` and `group` are required for lodging nodes.
     """
 
-    LoadForRoot = []
-    min_capacity = 0
+    groups = []
+    lb = 0
 
     match node_type:
         case NodeType.𝓢:
-            capacity = ref_data["max_capacity"]
+            ub = ref_data["max_ub"]
             cost = 0
-        case NodeType.𝒕:
-            capacity = 1
+        case NodeType.plant:
+            ub = 1
             cost = ref_data["waypoint_data"][node_id]["CP"]
         case NodeType.waypoint | NodeType.town:
-            capacity = ref_data["waypoint_capacity"]
+            ub = ref_data["waypoint_ub"]
             cost = ref_data["waypoint_data"][node_id]["CP"]
-        case NodeType.𝓡:
-            capacity = ref_data["lodging_data"][node_id]["max_capacity"] + ref_data["lodging_bonus"]
-            capacity = min(capacity, ref_data["waypoint_capacity"])
+        case NodeType.group:
+            ub = ref_data["lodging_data"][node_id]["max_ub"] + ref_data["lodging_bonus"]
+            ub = min(ub, ref_data["waypoint_ub"])
             cost = 0
-            LoadForRoot = []
         case NodeType.lodging:
-            capacity = kwargs.get("capacity")
-            min_capacity = kwargs.get("min_capacity")
+            ub = kwargs.get("ub")
+            lb = kwargs.get("lb")
             root = kwargs.get("root")
             cost = kwargs.get("cost")
             assert (
-                capacity and (min_capacity is not None) and (cost is not None) and root
-            ), "Lodging nodes require 'capacity', 'min_capacity' 'cost' and 'root' kwargs."
-            LoadForRoot = [root]
+                ub and (lb is not None) and (cost is not None) and root
+            ), "Lodging nodes require 'ub', 'lb' 'cost' and 'root' kwargs."
+            groups = [root]
         case NodeType.𝓣:
-            capacity = ref_data["max_capacity"]
+            ub = ref_data["max_ub"]
             cost = 0
         case NodeType.INVALID:
             assert node_type is not NodeType.INVALID, "INVALID node type."
             return  # Unreachable: Stops pyright unbound error reporting.
 
-    node = Node(node_id, node_type, capacity, min_capacity, cost, LoadForRoot)
+    node = Node(node_id, node_type, ub, lb, cost, groups)
     if node.key not in nodes:
-        if node.type is NodeType.𝓡:
-            node.𝓻 = [node]
+        if node.type is NodeType.group:
+            node.groups = [node]
         nodes[node.key] = node
 
     return nodes[node.key]
 
 
-# def get_reference_data(lodging_bonus, top_n):
 def get_reference_data(config):
     """Read and prepare data from reference json files."""
     ref_data = {
         "lodging_bonus": config["lodging_bonus"],
-        "top_n_terminal_values": config["top_n"],
+        "top_n_plant_values": config["top_n"],
         "all_plantzones": read_workerman_json("plantzone.json").keys(),
         "lodging_data": read_workerman_json("all_lodging_storage.json"),
-        "terminal_values": read_user_json("node_values_per_town.json"),
-        "town_to_root": read_workerman_json("town_node_translate.json")["tnk2tk"],
-        "root_to_town": read_workerman_json("town_node_translate.json")["tk2tnk"],
-        "root_to_townname": read_workerman_json("warehouse_to_townname.json"),
+        "plant_values": read_user_json("node_values_per_town.json"),
+        "town_to_group": read_workerman_json("town_node_translate.json")["tnk2tk"],
+        "group_to_town": read_workerman_json("town_node_translate.json")["tk2tnk"],
+        "group_to_townname": read_workerman_json("warehouse_to_townname.json"),
         "waypoint_data": read_workerman_json("exploration.json"),
         "waypoint_links": read_workerman_json("deck_links.json"),
     }
 
-    terminals = ref_data["terminal_values"].keys()
-    roots = ref_data["terminal_values"][list(terminals)[0]].keys()
-    towns = [ref_data["root_to_town"][w] for w in roots]
+    plants = ref_data["plant_values"].keys()
+    groups = ref_data["plant_values"][list(plants)[0]].keys()
+    towns = [ref_data["group_to_town"][w] for w in groups]
 
-    ref_data["max_capacity"] = len(terminals)
-    ref_data["terminals"] = terminals
-    ref_data["roots"] = roots
+    ref_data["max_ub"] = len(plants)
+    ref_data["plants"] = plants
+    ref_data["groups"] = groups
     ref_data["towns"] = towns
 
-    for root, lodgings in ref_data["lodging_data"].items():
-        if root not in ref_data["roots"]:
+    for group, lodgings in ref_data["lodging_data"].items():
+        if group not in ref_data["groups"]:
             continue
         max_lodging = 1 + ref_data["lodging_bonus"] + max([int(k) for k in lodgings.keys()])
-        ref_data["lodging_data"][root]["max_capacity"] = max_lodging
+        ref_data["lodging_data"][group]["max_ub"] = max_lodging
 
     return ref_data
 
@@ -312,8 +313,8 @@ def print_sample_arcs(graph_data: GraphData):
 def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict[str, Any]):
     """Process all waypoint links and add the nodes and arcs to the graph.
 
-    Calls handlers for terminal and town nodes to add terminal value nodes and
-    root/lodging nodes with their respective source and sink arcs.
+    Calls handlers for plant and town nodes to add plant value nodes and
+    group/lodging nodes with their respective source and sink arcs.
     """
     for link in ref_data["waypoint_links"]:
         source, destination = get_link_nodes(nodes, link, ref_data)
@@ -322,130 +323,123 @@ def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict
 
         add_arcs(nodes, arcs, source, destination)
 
-        if source.type == NodeType.𝒕:
-            process_terminal(nodes, arcs, source, ref_data)
-        if destination.type == NodeType.town:
+        if source.isPlant:
+            process_plant(nodes, arcs, source, ref_data)
+        if destination.isTown:
             process_town(nodes, arcs, destination, ref_data)
 
 
-def process_terminal(
-    nodes: Dict[str, Node], arcs: Dict[tuple, Arc], terminal: Node, ref_data: Dict[str, Any]
+def process_plant(
+    nodes: Dict[str, Node], arcs: Dict[tuple, Arc], plant: Node, ref_data: Dict[str, Any]
 ):
-    """Add terminal root values and arcs between the source and terminal nodes."""
-    for i, (root_id, value_data) in enumerate(ref_data["terminal_values"][terminal.id].items(), 1):
-        if i > ref_data["top_n_terminal_values"]:
+    """Add plant group values and arcs between the source and plant nodes."""
+    for i, (group_id, value_data) in enumerate(ref_data["plant_values"][plant.id].items(), 1):
+        if i > ref_data["top_n_plant_values"]:
             break
         if value_data["value"] == 0:
             continue
         value_data["value"]
-        terminal.𝓻_prizes[root_id] = value_data
+        plant.group_prizes[group_id] = value_data
 
-    add_arcs(nodes, arcs, nodes["𝓢"], terminal)
+    add_arcs(nodes, arcs, nodes["𝓢"], plant)
 
 
 def process_town(
     nodes: Dict[str, Node], arcs: Dict[tuple, Arc], town: Node, ref_data: Dict[str, Any]
 ):
-    """Add town root and lodging nodes and arcs between the town and sink nodes."""
-    root_id = ref_data["town_to_root"][town.id]
-    lodging_data = ref_data["lodging_data"][root_id]
+    """Add town group and lodging nodes and arcs between the town and sink nodes."""
+    group_id = ref_data["town_to_group"][town.id]
+    lodging_data = ref_data["lodging_data"][group_id]
     lodging_bonus = ref_data["lodging_bonus"]
 
     lodgings = [(1 + lodging_bonus, 0)]
-    for capacity, lodging_data in lodging_data.items():
-        if capacity == "max_capacity":
+    for ub, lodging_data in lodging_data.items():
+        if ub == "max_ub":
             continue
-        current = (1 + lodging_bonus + int(capacity), lodging_data[0].get("cost"))
+        current = (1 + lodging_bonus + int(ub), lodging_data[0].get("cost"))
         while lodgings and current[1] <= lodgings[-1][1] and current[0] >= lodgings[-1][0]:
             lodgings.pop(-1)
         lodgings.append(current)
-        if current[0] + 1 >= ref_data["waypoint_capacity"]:
+        if current[0] + 1 >= ref_data["waypoint_ub"]:
             break
 
-    root_node = get_node(nodes, root_id, NodeType.𝓡, ref_data, capacity=lodgings[-1][0])
-    add_arcs(nodes, arcs, town, root_node)
+    group_node = get_node(nodes, group_id, NodeType.group, ref_data, ub=lodgings[-1][0])
+    add_arcs(nodes, arcs, town, group_node)
 
-    min_capacity = 0
-    for capacity, cost in lodgings:
+    lb = 0
+    for ub, cost in lodgings:
         lodging_node = get_node(
             nodes,
-            f"{root_node.id}_for_{capacity}",
+            f"{group_node.id}_for_{ub}",
             NodeType.lodging,
             ref_data,
-            capacity=capacity,
-            min_capacity=min_capacity,
+            ub=ub,
+            lb=lb,
             cost=cost,
-            root=root_node,
+            root=group_node,
         )
-        min_capacity = capacity + 1
-        add_arcs(nodes, arcs, root_node, lodging_node)
+        lb = ub + 1
+        add_arcs(nodes, arcs, group_node, lodging_node)
         add_arcs(nodes, arcs, lodging_node, nodes["𝓣"])
 
 
-def nearest_n_roots(ref_data: Dict[str, Any], graph_data: GraphData, nearest_n: int):
+def nearest_n_towns(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
     waypoint_graph = nx.DiGraph()
-    for node in graph_data["V"].values():
-        waypoint_graph.add_node(node.id, type=node.type)
-
-    for arc in graph_data["E"].values():
-        weight = arc.destination.cost
-        if "1727" in arc.name():
-            weight = 999999
+    for arc in G["E"].values():
+        weight = 999999 if "1727" in arc.name() else arc.destination.cost
         waypoint_graph.add_edge(arc.source.id, arc.destination.id, weight=weight)
-
     all_pairs = dict(nx.all_pairs_bellman_ford_path_length(waypoint_graph, weight="weight"))
 
-    nearest_roots_dist = {}
-    nearest_roots = {}
+    nearest_towns_dist = {}
+    nearest_towns = {}
 
-    for node_id, node in graph_data["V"].items():
-        if node.type in {NodeType.waypoint, NodeType.town}:
+    for node_id, node in G["V"].items():
+        if node.isWaypoint or node.isTown:
             distances = []
-            for root in graph_data["R"].values():
-                town_id = ref_data["root_to_town"][root.id]
-                distances.append((root, all_pairs[node.id][town_id]))
-            nearest_roots_dist[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
-            nearest_roots[node_id] = [w for w, _ in nearest_roots_dist[node_id]]
+            for group in G["G"].values():
+                town_id = ref_data["group_to_town"][group.id]
+                distances.append((group, all_pairs[node.id][town_id]))
+            nearest_towns_dist[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
+            nearest_towns[node_id] = [w for w, _ in nearest_towns_dist[node_id]]
 
-    return nearest_roots
+    return nearest_towns
 
 
-# def generate_empire_data(lodging_bonus, top_n, nearest_n, waypoint_capacity):
+def finalize_groups(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
+    # All group nodes have now been generated, finalize groups entries
+    nearest_towns = nearest_n_towns(ref_data, G, nearest_n)
+    for v in G["V"].values():
+        if v.type in [NodeType.𝓢, NodeType.𝓣]:
+            v.groups = [w for w in G["G"].values()]
+        elif v.isWaypoint or v.isTown:
+            v.groups = [w for w in nearest_towns[v.key]]
+        elif v.isPlant:
+            v.groups = [w for w in G["G"].values() if w.id in v.group_prizes.keys()]
+
+
 def generate_empire_data(config):
-    """Generate and return a Dict of Node and arc objects composing the empire data."""
+    """Generate and return a GraphData Dict composing the LP empire data."""
     validate_config(config)
     logging.basicConfig(level=config["data_log_level"])
 
-    arcs: Dict[tuple[str, str], Arc] = {}
-    nodes: Dict[str, Node] = {}
     ref_data = get_reference_data(config)
-    ref_data["waypoint_capacity"] = min(config["waypoint_ub"], config["budget"])
+    ref_data["waypoint_ub"] = min(config["waypoint_ub"], config["budget"])
+
+    nodes: Dict[str, Node] = {}
+    arcs: Dict[tuple[str, str], Arc] = {}
 
     get_node(nodes, "𝓢", NodeType.𝓢, ref_data)
     get_node(nodes, "𝓣", NodeType.𝓣, ref_data)
     process_links(nodes, arcs, ref_data)
 
-    nodes_dict = dict(sorted(nodes.items(), key=lambda item: item[1].type))
-    arcs_dict = dict(sorted(arcs.items(), key=lambda item: item[1].as_dict()["type"]))
-    roots = {k: v for k, v in nodes_dict.items() if v.type == NodeType.𝓡}
-
-    graph_data: GraphData = {
-        "V": nodes_dict,
-        "E": arcs_dict,
-        "R": roots,
+    G: GraphData = {
+        "V": dict(sorted(nodes.items(), key=lambda item: item[1].type)),
+        "E": dict(sorted(arcs.items(), key=lambda item: item[1].as_dict()["type"])),
+        "G": {k: v for k, v in nodes.items() if v.type == NodeType.group},
     }
+    finalize_groups(ref_data, G, config["nearest_n"])
 
-    # All root nodes have now been generated, finalize LoadForRoot entries
-    nearest_roots = nearest_n_roots(ref_data, graph_data, config["nearest_n"])
-    for node in nodes_dict.values():
-        if node.type in [NodeType.𝓢, NodeType.𝓣]:
-            node.𝓻 = [w for w in roots.values()]
-        elif node.type in [NodeType.waypoint, NodeType.town]:
-            node.𝓻 = [w for w in nearest_roots[node.key]]
-        elif node.type is NodeType.𝒕:
-            node.𝓻 = [w for w in roots.values() if w.id in node.𝓻_prizes.keys()]
-
-    return graph_data
+    return G
 
 
 def validate_config(config):
