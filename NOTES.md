@@ -26,115 +26,101 @@ A Node Empire typically works by
 * Player can only unlock things in chains.
   * Cities are unlocked by default.
   * Cities have 1 worker lodging and some storage slots unlocked by default.
-  * Player pays enough points to unlock something attached to the town.
+  * Player pays enough points to unlock something  attached to the town.
   * Player pays enough points to unlock something attached to the town or the
     previously unlocked thing.
-* When a player has unlocked a production node they assign a worker from a town.
+* When a player has unlocked a production node they assign a worker from a
+  connected town.
 * The worker gets materials from the production node and puts them in storage.
 * The town to node distance determines how much a worker gets (value).
 
 We can think of it in quite a few ways. Team Orienteering Problem, Prize
-Collecting Problem, Multi-Depot Vehicle Routing Problem and so on. The problem
-constraints get difficult to describe as a MILP problem and are timely to
-calculate when calculated and validated iteratively.
+Collecting Problem, Multi-Depot Vehicle Routing Problem and so on.
 
 
-## Alternative Representation
+## Representation
 
 If we flip the concept of the node empire on its head and think of the problem
-as a maximum flow problem I think it might be feasible to obtain maximum value
+as a flow problem it becomes feasible to obtain maximum value
 solutions while still following the rules of a Node Empire.
 
-By 'flipping' I mean to consider the Node Empire like this...
+By 'flipping' I mean that it would be typical to consider the towns as roots and
+the worker nodes (plants) as terminals but if the plants are the roots and the
+towns workers are the terminals it works like this...
 
-* Source node - with a supply equal to the number of possible empire workers.
-* Supply nodes - nodes representing each production node.
-* Supply Valued nodes - nodes representing each production node to each town.
-* Chosen Supply nodes - nodes representing each production node.
-* Unused Supply nodes - representing unassigned production nodes.
-* Network nodes (waypoints) - nodes representing the connection network.
-* Demand Aggregation nodes (Town Nodes) - nodes that are part of the Network nodes and have arcs
-  leading out of the connection network to Demand Nodes.
-* Demand nodes - representing the workers of each town.
-* Unused Demand nodes - representing unassigned production nodes.
-* Sink node.
+* _Source_ node.
+* _Roots_: Plants - nodes representing each production node for each town.
+* _Connections_: Waypoints - nodes representing the connection network.
+* _Connections_: Towns - part of the connection nodes but with arcs
+  leading out of the connection network to Lodging Nodes.
+* _Terminals_: Lodging - (the demand) representing the workers of each town.
+* _Sink_ node.
 
 In essence
-1. Production nodes are enabled.
-2. Production node's commodities are assigned to a town or unused.
-3. Production node is enabled in the connection network.
-4. Waypoints are enabled.
-5. Commodities arrive at network exit nodes (Town nodes).
+1. Plant nodes are enabled.
+2. Plant nodes are assigned to specific towns based on maximizing value.
+4. Waypoints are enabled connecting the plant to the specific town.
+5. Commodity arrives at Town node.
 6. A worker collects the commodity.
-
-I believe that by doing this we can create constraints that will properly model
-the Node Empire by following the connection rules and maximizing the value.
-
-Constraints:
-
-- Supply nodes: Impose a single capatown limit for production nodes.
-- Supply Valued nodes: Impose a single town assignment for the commodities of a
-production node.
-- Chosen Supply nodes: Impose that the count of enabled production nodes
-is <= number of town workers for each town and the total number of enabled
-production nodes + unused nodes == total production node count. (For debugging,
-this ensures our flow is correct up to the entry into the Network Nodes.)
-- Demand Nodes: Impose that the count of enabled Demand Nodes (town workers) ==
-the count of enabled Supply Valued nodes for the supplier (Town) and the total
-enabled workers from all cities + unused demand == total production node count.
-(For debugging, this ensures our flow is correct up to the Network Nodes exit.)
-- Sink: Impose the sink count == the supply count at source.
+7. Cost is contained to a budget.
 
 ## A Better Representation
 
-Instance:  
- Budget 𝐵: 𝐵 → ℕ  
- Graph 𝑮(𝑉|𝐸)  
-with  
- vertex costs 𝑐 : 𝑉 → ℕ  
- terminals 𝑡 : 𝑡 ∈ 𝑉  
- terminal roots 𝑟 : 𝑟₁, …, 𝑟ₙ, 𝑟 ∈ 𝑉  
- terminal prizes 𝑝ₜᵣ : 𝑝ₜᵣ₁, …, 𝑝ₜᵣₙ 𝑝 → ℝ⁺  
- root group size limits 𝑙ᵣ : 𝑙ᵣ₁, …, 𝑙ᵣₙ, 𝑙 → ℕ  
- root group size costs 𝑔ᵣ(𝑥) : {1,2,…,𝑙ᵣ} → ℕ, 𝑥 = |𝑟ₙ|
+Given an undirected node-weighted graph G transform the graph into a directed
+edge weighted graph, then solve with
 
-Solution:  
- Forest 𝐹 ⊆ 𝑉
+### Variables:
 
-Objective:  
- Maximize: ∑𝑝ₜᵣ - ∑𝑐ᵥ - ∑𝑔ᵣₙ(𝑥), ∀ (𝑡,𝑟) ∈ 𝐹, ∀ 𝑉 ∈ 𝐹, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ  
-or  
- Minimize: ∑𝑝ₜᵣ + ∑𝑐ᵥ + ∑𝑔ᵣₙ(𝑥) ∀ (𝑡,r) ∉ 𝐹, ∀ 𝑉 ∈ 𝐹, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ  
- where: 𝑟 of (𝑡,𝑟) ↦ max(𝑝ₜᵣ₁, …, 𝑝ₜᵣₙ)
+• cost ∈ ℕ₀ such that 0 ≤ cost ≤ budget
 
-Subject to:  
- ∑𝑐ᵥ + ∑𝑔ᵣₙ(𝑥) ≤ 𝐵, ∀ 𝑉 ∈ 𝐹, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ  
- ∣𝐹 ∩ 𝑟ₙ∣ ≤ 𝑙ᵣₙ, ∀ 𝑟 ∈ 𝑟₁, …, 𝑟ₙ
-​
-Inbound and outbound flows ƒ⁻ ƒ⁺ , respectively.  δ⁻  δ⁺
+for all nodes v ∈ G[V]:  
+• xᵥ ∈ {0, 1} (indicates if the node is included in the solution)  
+• fᵥ ∈ ℕ₀ such that 0 ≤ fᵥ ≤ ubᵥ (total flow load at the node)
 
-𝓚
+for all arcs e ∈ G[E], and for all groups g ∈ (source ∩ destination) groups:  
+• fₑ,g ∈ {0, 1} if the source type is 𝓢 or plant.  
+• fₑ,g ∈ ℕ₀ such that 0 ≤ fₑ,g ≤ ubₑ,g if the source type is not 𝓢 or plant.
 
-## Data Prep
+### Objective: Maximize the total prize value:
 
-In order to facilitate any representation of a Node Empire we'll need some basic
-data.
+• maximize ∑ₚ ∑ₑ vₚ,g * fₑ,g for all groups g
 
+where:
+vₚ,g is the value associated with group g in plant p
+fₑ,g represents the binary flow of group g on arc e inbound to plant p
 
-### Optimized Node Values Per Town
+### Subject to:
 
-- Towns that can assign workers: use the keys from distances_tk2pzk.json.
-- Production nodes: use the keys in plantzone_drops.json.
-- Production node drops: plantzone_drops.json is the count of drops per cycle.
-* Production node workload: use default workloads from plantzone_drops.json.
-- Distance: distances_tk2pzk.json is the worker travel distance from each town
-to each production node.
-- Workers: worker_static.json and skills.json provide the worker stats.
-- Item pricing: market.json is a recent static snapshot of item values.
+Cost Constraint:
 
-To calculate an optimum node value per town each production node needs a value
-and since each node can potentially supply one or more different commodities the
-node values must be calculated using the node's item values and the worker stats.
-The optimum worker stats are determined by the combination of stats that yield
-the highest value for the node from a given town.
+• cost = ∑ᵥ cᵥxᵥ
 
+where cᵥ is the cost associated with node v, and xᵥ is the binary decision variable.
+
+Lodging Exclusivity:
+
+For each group g:
+
+• ∑ᵥ xᵥ,g ≤ 1
+
+where xᵥ is the binary variable indicating if the lodging node is selected,
+and the sum is over all lodgings in group g.
+
+Flow Conservation:
+
+For all nodes v ∈ G[V]:
+
+• ∑ₑ fₑ⁻,g = ∑ₑ fₑ⁺,g
+
+where fₑ⁻,g represents the flow variable for group g on inbound arcs e to node v,
+and fₑ⁺,g represents the flow on outbound arcs e from node v.
+(Includes sink 𝓣 inbound to source 𝓢 outbound.)
+
+## Future Direction
+
+Setup problem as a Budgeted Prize Collecting Steiner Forest Problem with dynamic
+capacity constraints and figure out how to do that while retaining the planar
+graph. I believe this problem can be solved with minimal MIP using
+preprocessing, approximation and branch and cut for Steiner Problems.
+
+I just have to learn how...

@@ -19,6 +19,8 @@ class GraphData(TypedDict):
     V: Dict[str, Node]
     E: Dict[tuple[str, str], Arc]
     G: Dict[str, Node]
+    P: Dict[str, Node]
+    L: Dict[str, Node]
 
 
 class NodeType(IntEnum):
@@ -61,11 +63,19 @@ class Node:
         self.isLodging = type == NodeType.lodging
         self.isTown = type == NodeType.town
         self.isWaypoint = type == NodeType.waypoint
+        self.isGroup = type == NodeType.group
 
     def name(self) -> str:
         if self.type in [NodeType.𝓢, NodeType.𝓣]:
             return self.id
         return f"{self.type.name}_{self.id}"
+
+    def inSolution(self):
+        x_var = self.vars.get("x", None)
+        if x_var is not None:
+            return x_var.varValue is not None and round(x_var.varValue) >= 1
+        else:
+            return False
 
     def as_dict(self) -> Dict[str, Any]:
         obj_dict = {
@@ -435,7 +445,9 @@ def generate_empire_data(config):
     G: GraphData = {
         "V": dict(sorted(nodes.items(), key=lambda item: item[1].type)),
         "E": dict(sorted(arcs.items(), key=lambda item: item[1].as_dict()["type"])),
-        "G": {k: v for k, v in nodes.items() if v.type == NodeType.group},
+        "G": {k: v for k, v in nodes.items() if v.isGroup},
+        "P": {k: v for k, v in nodes.items() if v.isPlant},
+        "L": {k: v for k, v in nodes.items() if v.isLodging},
     }
     finalize_groups(ref_data, G, config["nearest_n"])
 

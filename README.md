@@ -11,7 +11,7 @@ Current testing workflow:
 
 ----
 
-## Goal: Solve Minimum Cost Multi-Commodity Flow Problem
+## Goal: Solve Multi-Commodity Flow Problem
 
 Attempting to come up with a reasonably efficient solution.
 
@@ -24,15 +24,17 @@ Using a max cost limit of 40 takes just over 10 minutes.
 
 ## WSL -> Python -> pulp -> HiGHS
 
-Still shouldn't scale.
-
-Parallel doesn't kick in for the problem even with parallel and threads flags.
+Still doesn't scale. Perhaps when the parallel solver makes it into HiGHS?
 
 Using a max cost limit of 40 takes just under 4 minutes but bumping the cost
-up to 50 requires almost 16 minutes.
+up to 50 requires about 15 minutes.
 
-## TODO: Try hybrid LP
+## TODO: Try hybrid approach as Steiner Forest
 
-Should scale better.
+Solving as a Steiner Forest on instances with a small budget can be done in
+under a 1s using `scip-jack` but that is because the small budget naturally
+constrains the solution to a single tree whereas larger budgets need the forests
+and need those forest to be able to be combined.
 
-More complex.
+Definitely more complex but should "solve" any possible instance of the
+parameters in seconds.

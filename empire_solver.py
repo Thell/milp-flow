@@ -32,75 +32,67 @@ def create_problem(config, G):
             if key.startswith("groupflow_") and (key == groupflow or v.isLodging)
         ]
 
-    def link_in_out(prob: LpProblem, v: Node, in_arcs: List[Arc], out_arcs: List[Arc]):
-        flow_vars = []
+    def link_in_out_by_group(prob: LpProblem, v: Node, in_arcs: List[Arc], out_arcs: List[Arc]):
+        all_inflows = []
         f = v.vars["f"]
         for group in v.groups:
             groupflow_key = f"groupflow_{group.id}"
-            ins = filter_arcs(groupflow_key, in_arcs)
-            flow_vars.append(ins)
-            outs = filter_arcs(groupflow_key, out_arcs)
-            prob += lpSum(ins) == lpSum(outs), f"balance_{groupflow_key}_at_{v.name()}"
-        prob += f == lpSum(flow_vars), f"flow_{v.name()}"
+            inflows = filter_arcs(groupflow_key, in_arcs)
+            outflows = filter_arcs(groupflow_key, out_arcs)
+            prob += lpSum(inflows) == lpSum(outflows), f"balance_{groupflow_key}_at_{v.name()}"
+            all_inflows.append(inflows)
+        prob += f == lpSum(all_inflows), f"flow_{v.name()}"
         prob += f <= v.ub * v.vars["x"], f"x_{v.name()}"
 
     prob = LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
 
     # Variables
-
     # Create cost ∈ ℕ₀ 0 <= cost <= budget
-    cost = LpVariable("cost", lowBound=0, upBound=config["budget"], cat="Integer")
+    cost = LpVariable("cost", 0, config["budget"], "Integer")
 
     # Create node variables.
     for v in G["V"].values():
         # x ∈ {0,1} for each node indicating if node is in solution and cost calculation.
-        v.vars["x"] = LpVariable(f"x_{v.name()}", cat="Binary")
-        # f ∈ ℕ₀ for each node such that 0 <= f <= 𝓬 for cost calculation and performance.
-        v.vars["f"] = LpVariable(f"flow_{v.name()}", lowBound=0, upBound=v.ub, cat="Integer")
+        v.vars["x"] = LpVariable(f"x_{v.name()}", 0, 1, "Binary")
+        # f ∈ ℕ₀ for each node such that 0 <= f <= ub for cost calculation and performance.
+        v.vars["f"] = LpVariable(f"flow_{v.name()}", 0, v.ub, "Integer")
 
-    # Create edge variables.
+    # Create arc variables.
     for arc in G["E"].values():
-        # group specific f ∈ ℕ₀ vars for each arc 0 <= f <= 𝓬
+        # Group specific f ∈ ℕ₀ vars for each arc 0 <= f <= ub
         for group in set(arc.source.groups).intersection(set(arc.destination.groups)):
             key = f"groupflow_{group.id}"
             ub = arc.ub if arc.source.type in [NT.group, NT.𝓢, NT.𝓣, NT.lodging] else group.ub
             cat = "Binary" if arc.source.type in [NT.𝓢, NT.plant] else "Integer"
             arc.vars[key] = LpVariable(f"{key}_on_{arc.name()}", 0, ub, cat)
 
-    # Objective
-
-    # Maximize total prizes ∑v(p)x for group specific values in all binary plant inflows.
-    prizes = []
-    for v in G["V"].values():
-        if v.isPlant:
-            for group in v.groups:
-                for arc in v.inbound_arcs:
-                    prizes.append(
-                        round(v.group_prizes[group.id]["value"], 2)
-                        * arc.vars[f"groupflow_{group.id}"]
-                    )
-    prob += lpSum(prizes), "ObjectiveFunction"
+    # Objective: Maximize prizes ∑v(p)x for group specific values for all binary plant inflows.
+    prize_values = [
+        round(p.group_prizes[group.id]["value"], 2) * arc.vars[f"groupflow_{group.id}"]
+        for p in G["P"].values()
+        for group in p.groups
+        for arc in p.inbound_arcs
+    ]
+    prob += lpSum(prize_values), "ObjectiveFunction"
 
     # Constraints
-
     # Cost var is defined with ub = budget so this is ∑v(𝑐)x <= budget
     prob += cost == lpSum(v.cost * v.vars["x"] for v in G["V"].values()), "TotalCost"
 
-    # A single lodging within each group.
+    # Group specific plant exclusivity enforced by plant's 0<=f<=ub bounds at variable creation.
+
+    # Group specific lodging exclusivity, each lodging's 0<=f<=ub enforces correct selection.
     for group in G["G"].values():
-        vars = []
-        for v in G["V"].values():
-            if v.name().startswith(f"lodging_{group.id}_"):
-                vars.append(v.vars["x"])
+        vars = [lodge.vars["x"] for lodge in G["L"].values() if lodge.groups[0] == group]
         prob += lpSum(vars) <= 1, f"lodging_{group.id}"
 
     # Group specific f⁻ == f⁺
     for v in G["V"].values():
         if v.type not in [NT.𝓢, NT.𝓣]:
-            link_in_out(prob, v, v.inbound_arcs, v.outbound_arcs)
+            link_in_out_by_group(prob, v, v.inbound_arcs, v.outbound_arcs)
 
     # Group specific f⁻𝓣 == f⁺𝓢
-    link_in_out(prob, G["V"]["𝓣"], G["V"]["𝓣"].inbound_arcs, G["V"]["𝓢"].outbound_arcs)
+    link_in_out_by_group(prob, G["V"]["𝓣"], G["V"]["𝓣"].inbound_arcs, G["V"]["𝓢"].outbound_arcs)
 
     return prob
 
@@ -176,14 +168,28 @@ def print_solving_info_header(config):
     )
 
 
-def extract_solution(config, prob, graph_data):
+def extract_solution(config, prob, G):
     solution_vars = {}
-    gt0lt1_vars = set()
+
+    v_inSol = {k: v for k, v in G["V"].items() if v.inSolution()}
+
+    plant_count = len([v for v in v_inSol.values() if v.isPlant])
+    plant_cost = sum([v.cost for v in v_inSol.values() if v.isPlant])
+    waypoint_count = len([v for v in v_inSol.values() if v.isWaypoint])
+    waypoint_cost = sum([v.cost for v in v_inSol.values() if v.isWaypoint])
+    lodging_count = sum([round(v.vars["f"].varValue) for v in v_inSol.values() if v.isLodging])
+    lodging_cost = sum([v.cost for v in v_inSol.values() if v.isLodging])
+    calculated_cost = plant_cost + waypoint_cost + lodging_cost
+
+    logging.info(
+        "\n"
+        f"              Plants: {plant_count} for {plant_cost}\n"
+        f"           Waypoints: {waypoint_count} for {waypoint_cost}\n"
+        f"            Lodgings: {lodging_count} for {lodging_cost}\n"
+    )
 
     for v in prob.variables():
         if v.varValue is not None and v.varValue > 0:
-            if v.varValue < 1:
-                gt0lt1_vars.add(v.name)
             rounded_value = round(v.varValue)
             if rounded_value >= 1:
                 solution_vars[v.name] = {
@@ -192,10 +198,7 @@ def extract_solution(config, prob, graph_data):
                     "upBound": v.upBound,
                 }
 
-    calculated_cost = 0
     outputs = []
-    arc_loads = []
-    waypoint_loads = []
     for k, v in solution_vars.items():
         if k.startswith("flow_"):
             kname = k.replace("flow_", "")
@@ -203,17 +206,12 @@ def extract_solution(config, prob, graph_data):
                 # An arc
                 𝓢, destination = kname.split("_to_")
                 arc_key = (𝓢, destination)
-                arc = graph_data["E"].get(arc_key, None)
+                arc = G["E"].get(arc_key, None)
                 outputs.append(f"{arc}, {v}")
-                if arc.source.type is NT.waypoint or arc.destination.type is NT.waypoint:
-                    arc_loads.append((arc, v["value"]))
             else:
                 # A node
-                node = graph_data["V"].get(kname, None)
+                node = G["V"].get(kname, None)
                 outputs.append(f"{node}, {v}")
-                calculated_cost = calculated_cost + node.cost
-                if node.type is NT.waypoint:
-                    waypoint_loads.append((node, v["value"]))
     outputs = natsort.natsorted(outputs)
 
     solver_cost = 0
@@ -228,14 +226,11 @@ def extract_solution(config, prob, graph_data):
 
     logging.info(
         f"\n"
-        f"                 |𝒕|: {len([x for x in outputs if x.startswith("Node(name: plant_")])}\n"
         f"              budget: {config["budget"]}\n"
         f"           Actual ∑𝑐: {calculated_cost}\n"
         f"               LP ∑𝑐: {solver_cost}\n"
         f"              ∑prize: {round(solver_value)}\n"
     )
-    if gt0lt1_vars:
-        logging.warning(f"WARNING: 0 < x < 1 vars count: {len(gt0lt1_vars)}")
 
     data = {"config": config, "objective": solver_value, "solution_vars": solution_vars}
     return data
