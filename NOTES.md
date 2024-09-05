@@ -41,8 +41,8 @@ Collecting Problem, Multi-Depot Vehicle Routing Problem and so on.
 ## Representation
 
 If we flip the concept of the node empire on its head and think of the problem
-as a flow problem it becomes feasible to obtain maximum value
-solutions while still following the rules of a Node Empire.
+as a flow problem it becomes feasible to obtain maximum value solutions while
+still following the rules of a Node Empire.
 
 By 'flipping' I mean that it would be typical to consider the towns as roots and
 the worker nodes (plants) as terminals but if the plants are the roots and the
@@ -121,6 +121,6 @@ and fₑ⁺,g represents the flow on outbound arcs e from node v.
 Setup problem as a Budgeted Prize Collecting Steiner Forest Problem with dynamic
 capacity constraints and figure out how to do that while retaining the planar
 graph. I believe this problem can be solved with minimal MIP using
-preprocessing, approximation and branch and cut for Steiner Problems.
+preprocessing, approximation, primal dual and branch and cut algos for Steiner Problems.
 
 I just have to learn how...
