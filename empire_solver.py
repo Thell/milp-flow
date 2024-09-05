@@ -2,13 +2,11 @@
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import List
 
-
-import natsort
-from pulp import LpVariable, lpSum, LpProblem
-import pulp
+from pulp import LpVariable, lpSum, LpProblem, LpMaximize, HiGHS_CMD
 
 from generate_empire_data import (
     NodeType as NT,
@@ -27,8 +25,8 @@ def create_problem(config, G):
     def filter_arcs(groupflow, arcs):
         return [
             var
-            for a in arcs
-            for key, var in a.vars.items()
+            for arc in arcs
+            for key, var in arc.vars.items()
             if key.startswith("groupflow_") and (key == groupflow or v.isLodging)
         ]
 
@@ -44,7 +42,7 @@ def create_problem(config, G):
         prob += f == lpSum(all_inflows), f"flow_{v.name()}"
         prob += f <= v.ub * v.vars["x"], f"x_{v.name()}"
 
-    prob = LpProblem("MaximizeEmpireValue", pulp.LpMaximize)
+    prob = LpProblem("MaximizeEmpireValue", LpMaximize)
 
     # Variables
     # Create cost ∈ ℕ₀ 0 <= cost <= budget
@@ -68,10 +66,10 @@ def create_problem(config, G):
 
     # Objective: Maximize prizes ∑v(p)x for group specific values for all binary plant inflows.
     prize_values = [
-        round(p.group_prizes[group.id]["value"], 2) * arc.vars[f"groupflow_{group.id}"]
-        for p in G["P"].values()
-        for group in p.groups
-        for arc in p.inbound_arcs
+        round(plant.group_prizes[group.id]["value"], 2) * arc.vars[f"groupflow_{group.id}"]
+        for plant in G["P"].values()
+        for group in plant.groups
+        for arc in plant.inbound_arcs
     ]
     prob += lpSum(prize_values), "ObjectiveFunction"
 
@@ -97,7 +95,24 @@ def create_problem(config, G):
     return prob
 
 
-def config_solver(config, outfile_path, filename):
+def config_filename(config):
+    parts = [
+        config["solver"]["file_prefix"],
+        f"b{config["budget"]}",
+        f"lb{config["lodging_bonus"]}",
+        f"tn{config["top_n"]}",
+        f"nn{config["nearest_n"]}",
+        f"wc{config["waypoint_capacity"]}",
+        f"g{config["solver"]["mips_gap"].replace("0.", "")}",
+        config["solver"]["file_suffix"],
+    ]
+    return "_".join(filter(None, parts))
+
+
+def config_solver(config):
+    filename = config_filename(config)
+    filepath = Path(os.path.dirname(__file__), "highs_output")
+
     mips_tol = config["solver"]["mips_tol"]
     mips_gap = config["solver"]["mips_gap"]
     if mips_gap == "auto":
@@ -108,48 +123,27 @@ def config_solver(config, outfile_path, filename):
         "parallel=on",
         "threads=16",
         f"time_limit={time_limit}",
-        f"mip_rel_gap={mips_gap}",
-        "mip_heuristic_effort=0.5",
         f"mip_feasibility_tolerance={mips_tol}",
+        "mip_heuristic_effort=0.5",
+        f"mip_rel_gap={mips_gap}",
         f"primal_feasibility_tolerance={mips_tol}",
-        "mip_improving_solution_save=on",
-        f"mip_improving_solution_file={outfile_path}/improvements/{filename}.sol",
+        # "mip_improving_solution_save=on",
+        # f"mip_improving_solution_file={filepath.joinpath("improvements", f'{filename}.sol')}",
+        # f"write_model_file={filepath.joinpath("models", f"{filename}.lp")}",
         # f"write_presolved_model_to_file=True",
     ]
     options = [o for o in options if "default" not in o]
 
-    solver = pulp.HiGHS_CMD(
-        # path="/home/thell/.local/bin/highs",
+    solver = HiGHS_CMD(
         path="/home/thell/HiGHS/build/bin/highs",
         keepFiles=True,
         options=options,
-        logPath=f"{outfile_path}/logs/{filename}.log",
+        logPath=filepath.joinpath("logs", f"{filename}.log"),
     )
     return solver
 
 
-def config_filename(config):
-    budget = config["budget"]
-    lodging_bonus = config["lodging_bonus"]
-    top_n = config["top_n"]
-    nearest_n = config["nearest_n"]
-    waypoint_capacity = config["waypoint_capacity"]
-    prefix = config["solver"]["file_prefix"]
-    suffix = config["solver"]["file_suffix"]
-    mips_gap = config["solver"]["mips_gap"]
-    if mips_gap == "auto":
-        mips_gap = budget / 10_000
-    mips_gap = str(mips_gap).replace("0.", "")
-    if prefix:
-        prefix = f"{prefix}_"
-    if suffix:
-        suffix = f"_{suffix}"
-
-    filename = f"{prefix}mc{budget}_lb{lodging_bonus}_tn{top_n}_nn{nearest_n}_wc{waypoint_capacity}_g{mips_gap}{suffix}"
-    return filename
-
-
-def print_solving_info_header(config):
+def print_solving_info_header(config, G: GraphData):
     budget = config["budget"]
     lodging_bonus = config["lodging_bonus"]
     top_n = config["top_n"]
@@ -162,69 +156,31 @@ def print_solving_info_header(config):
 
     logging.info(
         f"\n===================================================="
-        f"\nSolving: budget: {budget}, Lodging_bonus: {lodging_bonus} top_n: {top_n},"
-        f" nearest_n: {nearest_n}, capacity={waypoint_capacity}"
-        f"\nUsing threads=16 and mip_feasibility_tolerance={mips_tol}, gap: {mips_gap}"
+        f"\nSolving:    graph with {len(G['V'])} nodes and {len(G['E'])} arcs"
+        f"\n  Using:    budget: {budget}, lodging_bonus: {lodging_bonus}, top_n: {top_n},"
+        f" nearest_n: {nearest_n}, capacity: {waypoint_capacity}"
+        f"\n   With:    threads: 16, mip_feasibility_tolerance: {mips_tol}, gap: {mips_gap}"
     )
 
 
-def extract_solution(config, prob, G):
-    solution_vars = {}
-
+def print_solving_info_trailer(config, prob, G):
     v_inSol = {k: v for k, v in G["V"].items() if v.inSolution()}
-
     plant_count = len([v for v in v_inSol.values() if v.isPlant])
     plant_cost = sum([v.cost for v in v_inSol.values() if v.isPlant])
     waypoint_count = len([v for v in v_inSol.values() if v.isWaypoint])
     waypoint_cost = sum([v.cost for v in v_inSol.values() if v.isWaypoint])
     lodging_count = sum([round(v.vars["f"].varValue) for v in v_inSol.values() if v.isLodging])
     lodging_cost = sum([v.cost for v in v_inSol.values() if v.isLodging])
+
     calculated_cost = plant_cost + waypoint_cost + lodging_cost
+    solver_cost = prob.variablesDict()["cost"].varValue
+    solver_value = prob.objective.value()
 
     logging.info(
         "\n"
         f"              Plants: {plant_count} for {plant_cost}\n"
         f"           Waypoints: {waypoint_count} for {waypoint_cost}\n"
         f"            Lodgings: {lodging_count} for {lodging_cost}\n"
-    )
-
-    for v in prob.variables():
-        if v.varValue is not None and v.varValue > 0:
-            rounded_value = round(v.varValue)
-            if rounded_value >= 1:
-                solution_vars[v.name] = {
-                    "value": rounded_value,
-                    "lowBound": v.lowBound,
-                    "upBound": v.upBound,
-                }
-
-    outputs = []
-    for k, v in solution_vars.items():
-        if k.startswith("flow_"):
-            kname = k.replace("flow_", "")
-            if "_to_" in k:
-                # An arc
-                𝓢, destination = kname.split("_to_")
-                arc_key = (𝓢, destination)
-                arc = G["E"].get(arc_key, None)
-                outputs.append(f"{arc}, {v}")
-            else:
-                # A node
-                node = G["V"].get(kname, None)
-                outputs.append(f"{node}, {v}")
-    outputs = natsort.natsorted(outputs)
-
-    solver_cost = 0
-    if "cost" in solution_vars.keys():
-        solver_cost = int(solution_vars["cost"]["value"])
-    solver_value = round(prob.objective.value())
-
-    if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
-        logging.debug("Detailed Solution:")
-        for output in outputs:
-            logging.debug(output)
-
-    logging.info(
         f"\n"
         f"              budget: {config["budget"]}\n"
         f"           Actual ∑𝑐: {calculated_cost}\n"
@@ -232,35 +188,43 @@ def extract_solution(config, prob, G):
         f"              ∑prize: {round(solver_value)}\n"
     )
 
-    data = {"config": config, "objective": solver_value, "solution_vars": solution_vars}
-    return data
+
+def save_reproduction_data(config, prob, G):
+    obj_value = round(prob.objective.value())
+    filename = f"{config_filename(config)}_{obj_value}"
+    filepath = Path(os.path.dirname(__file__), "highs_output", "solutions")
+
+    new_path = filepath.joinpath(f"{filename}.lp")
+    prob.writeLP(new_path)
+    print("         LP model saved:", new_path)
+
+    new_path = filepath.joinpath(f"{filename}_pulp.json")
+    prob.to_json(new_path)
+    print("Solved pulp model saved:", new_path)
+
+    old_path = filepath.parent.parent.joinpath("MaximizeEmpireValue-pulp.sol")
+    new_path = filepath.joinpath(f"{filename}_highs.sol")
+    Path(old_path).rename(new_path)
+    print("   HiGHS solution saved:", new_path)
+
+    new_path = filepath.joinpath(f"{filename}_cfg.json")
+    with open(new_path, "w") as file:
+        json.dump(config, file, indent=4)
+    print("   Problem config saved:", new_path)
+
+    print(f"     Stem for workerman: {new_path.stem.replace("_cfg", "")}")
 
 
 def empire_solver(config):
-    graph_data: GraphData = generate_empire_data(config)
-    print("nodes:", len(graph_data["V"]))
-    print("arcs:", len(graph_data["E"]))
+    G: GraphData = generate_empire_data(config)
+    solver = config_solver(config)
+    prob = create_problem(config, G)
 
-    prob = create_problem(config, graph_data)
-
-    filename = config_filename(config)
-    outfile_path = "/home/thell/milp-flow/highs_output"
-    prob.writeLP(f"{outfile_path}/models/{filename}.lp")
-
-    print_solving_info_header(config)
-    solver = config_solver(config, outfile_path, filename)
+    print_solving_info_header(config, G)
     solver.solve(prob)
+    print_solving_info_trailer(config, prob, G)
 
-    old_path = f"{outfile_path}/../MaximizeEmpireValue-pulp.sol"
-    new_path = f"{outfile_path}/solutions/{filename}.sol"
-    Path(old_path).rename(new_path)
-    print("Solution moved to:", new_path)
-
-    out_data = extract_solution(config, prob, graph_data)
-    filepath = f"{outfile_path}/solution-vars/{filename}_{out_data["objective"]}.json"
-    with open(filepath, "w") as file:
-        json.dump(out_data, file, indent=4)
-    print("Solution vars written to:", filepath)
+    save_reproduction_data(config, prob, G)
 
 
 def main(config):
@@ -282,8 +246,8 @@ def main(config):
         config["top_n"] = 4
         config["nearest_n"] = 5
         config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = "unicode_cleanup"
-        config["solver"]["file_suffix"] = "fixedlodgingtest"
+        config["solver"]["file_prefix"] = "sol_handling"
+        config["solver"]["file_suffix"] = ""
         config["solver"]["mips_gap"] = "default"
         config["solver"]["time_limit"] = "22000"
         empire_solver(config)

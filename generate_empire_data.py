@@ -90,12 +90,15 @@ class Node:
             "groups": [],
             "inbound_arcs": [arc.key for arc in self.inbound_arcs],
             "outbound_arcs": [arc.key for arc in self.outbound_arcs],
+            "vars": {},
         }
         for node in self.groups:
             if node is self:
                 obj_dict["groups"].append("self")
             else:
                 obj_dict["groups"].append(node.name())
+        for k, v in self.vars.items():
+            obj_dict["vars"][k] = v.to_dict()
         return obj_dict
 
     def __repr__(self) -> str:
@@ -126,10 +129,11 @@ class Arc:
             "type": self.type,
             "source": self.source.name(),
             "destination": self.destination.name(),
+            "vars": {k: v.to_dict() for k, v in self.vars.items() if round(v.varValue) > 0},
         }
 
-    def allowable_loads(self) -> set[Node]:
-        return set(self.source.groups).intersection(set(self.destination.groups))
+    def inSolution(self) -> bool:
+        return self.source.inSolution() and self.destination.inSolution()
 
     def name(self) -> str:
         return f"{self.source.name()}_to_{self.destination.name()}"
