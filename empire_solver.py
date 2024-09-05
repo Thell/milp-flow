@@ -241,12 +241,12 @@ def main(config):
     # 30 =>       2389      14      1126  96.80%   61193200.58428  58540725           4.53%     1793    421   9567     1034k   304.1s
     # 50 =>       7290       5      3502  99.44%   87363482.57106  84340234.96002     3.58%     2267    617   9819     2901k   914.8s
 
-    for budget in [10]:
+    for budget in [5, 10, 20, 30, 50]:
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5
         config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = "sol_handling"
+        config["solver"]["file_prefix"] = ""
         config["solver"]["file_suffix"] = ""
         config["solver"]["mips_gap"] = "default"
         config["solver"]["time_limit"] = "22000"
