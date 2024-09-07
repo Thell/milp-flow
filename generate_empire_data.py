@@ -181,6 +181,156 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
                 arc.destination.groups = [arc.source]
 
 
+def merge_nodes(link_graph):
+    from collections import deque
+
+    next_node_id = 10000  # Start hypernode IDs from 10000
+    node_map = {node: node for node in link_graph.nodes()}
+    queue = deque(link_graph.nodes())  # Initialize the queue with all nodes
+
+    def get_hypernode_id(node, neighbor):
+        """Determine the ID to use for the merged node."""
+        if node >= 10000 and neighbor >= 10000:
+            return min(node, neighbor)
+        elif node >= 10000:
+            return node
+        elif neighbor >= 10000:
+            return neighbor
+        else:
+            return next_node_id
+
+    while queue:
+        node = queue.popleft()  # Get the next node in the queue
+
+        if node not in link_graph:  # Skip if the node has already been merged and removed
+            continue
+        if link_graph.nodes[node]["type"] is not NodeType.waypoint:
+            continue
+
+        if nx.degree(link_graph, node) == 2:
+            neighbors = list(link_graph.neighbors(node))
+
+            for neighbor in neighbors:
+                if link_graph.nodes[neighbor]["type"] is not NodeType.waypoint:
+                    continue
+
+                if nx.degree(link_graph, neighbor) == 2:
+                    # Determine the new node ID
+                    new_node = get_hypernode_id(node, neighbor)
+                    if new_node == next_node_id:
+                        next_node_id += 1
+
+                    combined_weight = (
+                        link_graph.nodes[node]["weight"] + link_graph.nodes[neighbor]["weight"]
+                    )
+                    link_graph.add_node(new_node, weight=combined_weight, type=NodeType.waypoint)
+
+                    # Connect the new node to neighbors of `node` and `neighbor`
+                    for n in set(link_graph.neighbors(node)).union(link_graph.neighbors(neighbor)):
+                        if n != node and n != neighbor:
+                            link_graph.add_edge(new_node, n)
+
+                    # Update the map to reflect the final merged node
+                    for original_node in [node, neighbor]:
+                        node_map[original_node] = new_node
+
+                    # Also update the map for any nodes already mapped to these
+                    for key, value in node_map.items():
+                        if value in [node, neighbor]:
+                            node_map[key] = new_node
+
+                    # Remove old nodes
+                    if node != new_node:
+                        link_graph.remove_node(node)
+                    if neighbor != new_node:
+                        link_graph.remove_node(neighbor)
+
+                    # Add the new merged node to the queue for further processing
+                    queue.append(new_node)
+                    break  # Exit the loop to process the new_node in the next iteration
+
+    return link_graph, node_map  # Return the modified graph and the final node map
+
+
+def get_sparsified_link_graph(ref_data: Dict[str, Any]):
+    link_graph = nx.Graph()
+    for link in ref_data["waypoint_links"]:
+        link_graph.add_edge(link[0], link[1])
+    for node, data in link_graph.nodes(data=True):
+        data["weight"] = ref_data["waypoint_data"][str(node)]["CP"]
+        data["type"] = get_link_node_type(str(node), ref_data)
+    logging.info(f"Starting link_graph: {link_graph}")  # 820 nodes and 924 edges
+
+    # Simply remove non-Plant type leaf nodes.
+    # This decreases runtime notably on 100, 300, 450 and 501 budget tests but increases 150.
+    logging.debug(f"Node 1739 exists: {link_graph.has_node(1739)}")
+    removal_nodes = []
+    for node, data in link_graph.nodes(data=True):
+        if nx.degree(link_graph, node) == 1 and data["type"] is not NodeType.plant:
+            removal_nodes.append(node)
+    if removal_nodes:
+        link_graph.remove_nodes_from(removal_nodes)
+        removal_nodes = []
+    logging.debug(f"Simple leaf removal link_graph: {link_graph}")  #  -127 nodes and -127 edges
+    logging.debug(f"Node 1739 exists: {link_graph.has_node(1739)}")
+
+    # Repeatedly remove non-Plant type leaf nodes.
+    logging.debug(f"Node 1738 exists: {link_graph.has_node(1738)}")
+    stop = False
+    while not stop:
+        removal_nodes = []
+        for node, data in link_graph.nodes(data=True):
+            if nx.degree(link_graph, node) == 1 and data["type"] is not NodeType.plant:
+                removal_nodes.append(node)
+        if removal_nodes:
+            link_graph.remove_nodes_from(removal_nodes)
+            removal_nodes = []
+        else:
+            stop = True
+    logging.debug(f"Repeat leaf removals link_graph: {link_graph}")  #  -8 nodes and -8 edges
+    logging.debug(f"Node 1738 exists: {link_graph.has_node(1738)}")
+
+    # Remove 2-degree nodes with neighbors linked.
+    logging.debug(f"Node 636 exists: {link_graph.has_node(636)}")
+    removal_nodes = []
+    for node, data in link_graph.nodes(data=True):
+        if nx.degree(link_graph, node) == 2:
+            neighbors = list(link_graph.neighbors(node))
+            if link_graph.has_edge(*neighbors):
+                removal_nodes.append(node)
+    if removal_nodes:
+        link_graph.remove_nodes_from(removal_nodes)
+        removal_nodes = []
+    logging.debug(
+        f"Remove 2-degree nodes with neighbors linked: {link_graph}"
+    )  #  -3 nodes and -3 edges
+    logging.debug(f"Node 636 exists: {link_graph.has_node(636)}")
+
+    # Remove Ulukita nodes (no plants in region).
+    logging.debug(f"Node 1834 exists: {link_graph.has_node(1834)}")
+    for rng in [(1834, 1838), (1840, 1851)]:
+        link_graph.remove_nodes_from(range(rng[0], rng[1] + 1))
+    logging.debug(f"Remove Ulukita nodes: {link_graph}")  #  -16 nodes and -19 edges
+    logging.debug(f"Node 1834 exists: {link_graph.has_node(1834)}")
+
+    # Merge 2-degree waypoint neighbors.
+    logging.debug(
+        f"Nodes 702 and 1705 exist: {link_graph.has_node(702)}, {link_graph.has_node(1705)}"
+    )
+    link_graph, node_map = merge_nodes(link_graph)
+    logging.debug(f"Reduced link_graph: {link_graph}")  # -27 nodes and -32 edges
+    logging.debug(
+        f"Nodes 702 and 1705 exist: {link_graph.has_node(702)}, {link_graph.has_node(1705)}"
+    )
+
+    logging.debug(f"Num components: {nx.number_connected_components(link_graph)}")
+
+    logging.info(f"Reduced link_graph: {link_graph}")  # -27 nodes and -32 edges
+
+    print("Num 2-degree nodes:", len([n for n in link_graph if nx.degree(link_graph, n) == 2]))
+    return link_graph, node_map
+
+
 def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
     """Return the NodeType of the given node_id node.
 
@@ -195,23 +345,27 @@ def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
     return NodeType.waypoint
 
 
-def get_link_nodes(nodes, link, ref_data):
+def get_link_nodes(nodes, link, ref_data, link_graph):
     node_a_id, node_b_id = str(link[1]), str(link[0])
     node_a_type = get_link_node_type(node_a_id, ref_data)
     node_b_type = get_link_node_type(node_b_id, ref_data)
-
-    if NodeType.INVALID in [node_a_type, node_b_type]:
-        # Not used in the graph because they are beyond the scope of the optimization.
-        return (None, None)
 
     # Ensure arc node order.
     if node_a_type > node_b_type:
         node_a_id, node_b_id = node_b_id, node_a_id
         node_a_type, node_b_type = node_b_type, node_a_type
 
+    if NodeType.INVALID in [node_a_type, node_b_type]:
+        # Not used in the graph because they are beyond the scope of the optimization.
+        return (None, None)
+
     return (
-        get_node(nodes, node_a_id, node_a_type, ref_data),
-        get_node(nodes, node_b_id, node_b_type, ref_data),
+        get_node(
+            nodes, node_a_id, node_a_type, ref_data, cost=link_graph.nodes[int(node_a_id)]["weight"]
+        ),
+        get_node(
+            nodes, node_b_id, node_b_type, ref_data, cost=link_graph.nodes[int(node_b_id)]["weight"]
+        ),
     )
 
 
@@ -233,10 +387,12 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             cost = 0
         case NodeType.plant:
             ub = 1
-            cost = ref_data["waypoint_data"][node_id]["CP"]
+            cost = kwargs.get("cost")
+            assert cost is not None
         case NodeType.waypoint | NodeType.town:
             ub = ref_data["waypoint_ub"]
-            cost = ref_data["waypoint_data"][node_id]["CP"]
+            cost = kwargs.get("cost")
+            assert cost is not None
         case NodeType.group:
             ub = ref_data["lodging_data"][node_id]["max_ub"] + ref_data["lodging_bonus"]
             ub = min(ub, ref_data["waypoint_ub"])
@@ -330,8 +486,13 @@ def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict
     Calls handlers for plant and town nodes to add plant value nodes and
     group/lodging nodes with their respective source and sink arcs.
     """
+    link_graph, node_map = get_sparsified_link_graph(ref_data)
+
     for link in ref_data["waypoint_links"]:
-        source, destination = get_link_nodes(nodes, link, ref_data)
+        if link[0] not in node_map or link[1] not in node_map:
+            continue
+        mapped_link = (node_map[link[0]], node_map[link[1]])
+        source, destination = get_link_nodes(nodes, mapped_link, ref_data, link_graph)
         if source is None or destination is None:
             continue
 
@@ -412,7 +573,10 @@ def nearest_n_towns(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
             distances = []
             for group in G["G"].values():
                 town_id = ref_data["group_to_town"][group.id]
-                distances.append((group, all_pairs[node.id][town_id]))
+                if not nx.has_path(waypoint_graph, node.id, town_id):
+                    print("Missing path (", node.id, town_id, ")")
+                else:
+                    distances.append((group, all_pairs[node.id][town_id]))
             nearest_towns_dist[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
             nearest_towns[node_id] = [w for w, _ in nearest_towns_dist[node_id]]
 
