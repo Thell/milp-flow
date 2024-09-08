@@ -155,7 +155,6 @@ def print_solving_info_header(config, G: GraphData):
         mips_gap = budget / 10_000
 
     logging.info(
-        f"\n===================================================="
         f"\nSolving:    graph with {len(G['V'])} nodes and {len(G['E'])} arcs"
         f"\n  Using:    budget: {budget}, lodging_bonus: {lodging_bonus}, top_n: {top_n},"
         f" nearest_n: {nearest_n}, capacity: {waypoint_capacity}"
@@ -216,6 +215,8 @@ def save_reproduction_data(config, prob, G):
 
 
 def empire_solver(config):
+    print("\n====================================================")
+
     G: GraphData = generate_empire_data(config)
     solver = config_solver(config)
     prob = create_problem(config, G)
@@ -235,21 +236,23 @@ def main(config):
     """
 
     # for budget in [10, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
-    #  5 =>          0       0         0   0.00%   13953400.80399  13900824.11        0.38%        4      0      0      1220     1.3s
-    # 10 =>  L       0       0         0   0.00%   25014394.85418  24954483.03        0.24%     2046    151     61      2667     2.0s
-    # 20 =>        713       4       306  71.02%   48433521.05607  44334018.51        9.25%     1543    263   9896    294384    79.0s
-    # 30 =>       2389      14      1126  96.80%   61193200.58428  58540725           4.53%     1793    421   9567     1034k   304.1s
-    # 50 =>       7290       5      3502  99.44%   87363482.57106  84340234.96002     3.58%     2267    617   9819     2901k   914.8s
+    #   5 =>         1       0         1 100.00%   13900824.11     13900824.11        0.00%       50     11     16      1112     1.1s
+    #  10 =>         1       0         1 100.00%   24954483.03     24954483.03        0.00%       16      9      0      5110     2.3s
+    #  20 =>       411       0       176 100.00%   44334018.51     44334018.51        0.00%     1703    212   5822    188489    43.4s
+    #  30 =>      3196       0      1525 100.00%   58546460.58972  58540725           0.01%     2019    362   9877     1311k   402.9s
+    #  50 =>      7503       0      2875 100.00%   84347183.61581  84340234.96        0.01%     1563    490   9500     2327k   741.6s
+    # 100 =>     25109       0      8871 100.00%   137576048.0629  137562435.03       0.01%     2679    697  10022     8194k  2447.9s
+    # 501 =>     70794       0     12509 100.00%   409742231.6859  409701270.7202     0.01%     3653    807   9906    25030k  7615.7s
 
     for budget in [5, 10, 20, 30, 50]:
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5
         config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = ""
+        config["solver"]["file_prefix"] = "SparsifyLeafPruning"
         config["solver"]["file_suffix"] = ""
         config["solver"]["mips_gap"] = "default"
-        config["solver"]["time_limit"] = "22000"
+        config["solver"]["time_limit"] = "46800"
         empire_solver(config)
 
 
