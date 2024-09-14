@@ -190,7 +190,7 @@ def get_sparsified_link_graph(ref_data: Dict[str, Any]):
         data["type"] = get_link_node_type(str(node), ref_data)
     print("Starting link_graph:", link_graph)
 
-    # This decreases runtime notably on 100, 300, 450 and 501 budget tests but increases 150.
+    # This just removes the non-plant leaf nodes. Doing any other reductions reduces performance.
     removal_nodes = []
     for node, data in link_graph.nodes(data=True):
         if nx.degree(link_graph, node) == 1 and data["type"] is not NodeType.plant:
@@ -198,25 +198,6 @@ def get_sparsified_link_graph(ref_data: Dict[str, Any]):
     if removal_nodes:
         link_graph.remove_nodes_from(removal_nodes)
         removal_nodes = []
-
-    # Remove nodes in static filter ranges <== This causes ~ double runtime on 100 budget.
-    # for rng in [(1834, 1838), (1840, 1851)]:
-    #     link_graph.remove_nodes_from(range(rng[0], rng[1] + 1))
-
-    # Remove non-Plant type leaf nodes <== This causes increased runtimes on 30 budget.
-    # stop = False
-    # while not stop:
-    #     removal_nodes = []
-    #     for node, data in link_graph.nodes(data=True):
-    #         if nx.degree(link_graph, node) == 1 and data["type"] is not NodeType.plant:
-    #             removal_nodes.append(node)
-    #     if removal_nodes:
-    #         link_graph.remove_nodes_from(removal_nodes)
-    #         removal_nodes = []
-    #     else:
-    #         stop = True
-
-    # Reducing <->A<->B<-> where both are 2 degree to <->A+B<-> results in ~double runtimes.
 
     print("Reduced link_graph:", link_graph)
     return link_graph

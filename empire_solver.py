@@ -42,7 +42,7 @@ def create_problem(config, G):
         prob += f == lpSum(all_inflows), f"flow_{v.name()}"
         prob += f <= v.ub * v.vars["x"], f"x_{v.name()}"
 
-    prob = LpProblem("MaximizeEmpireValue", LpMaximize)
+    prob = LpProblem(config["name"], LpMaximize)
 
     # Variables
     # Create cost ∈ ℕ₀ 0 <= cost <= budget
@@ -74,10 +74,10 @@ def create_problem(config, G):
     prob += lpSum(prize_values), "ObjectiveFunction"
 
     # Constraints
+    # Group specific plant exclusivity enforced by plant's 0<=f<=ub bounds at variable creation.
+
     # Cost var is defined with ub = budget so this is ∑v(𝑐)x <= budget
     prob += cost == lpSum(v.cost * v.vars["x"] for v in G["V"].values()), "TotalCost"
-
-    # Group specific plant exclusivity enforced by plant's 0<=f<=ub bounds at variable creation.
 
     # Group specific lodging exclusivity, each lodging's 0<=f<=ub enforces correct selection.
     for group in G["G"].values():
@@ -91,6 +91,31 @@ def create_problem(config, G):
 
     # Group specific f⁻𝓣 == f⁺𝓢
     link_in_out_by_group(prob, G["V"]["𝓣"], G["V"]["𝓣"].inbound_arcs, G["V"]["𝓢"].outbound_arcs)
+
+    prob += G["V"]["𝓢"].vars["x"] == 1, "x_source"
+
+    # Enforce that all nodes maintain a minimum degree of 2.
+    for node in G["V"].values():
+        if node.type in [NT.S, NT.T]:
+            continue
+
+        in_neighbors = [arc.source.vars["x"] for arc in node.inbound_arcs]
+        out_neighbors = [arc.destination.vars["x"] for arc in node.outbound_arcs]
+
+        # Waypoint and plants always have 1 or more inbound neighbors than outbound neighbors
+        # which is sortof a misnomer since all waypoints have anti-parallel edges but for some
+        # reason this constraint improves performance. I think it is because of the zone edges.
+        if node.isWaypoint or node.isPlant:
+            prob += lpSum(in_neighbors) >= lpSum(out_neighbors)
+
+        # All nodes should be 2-degree.
+        if node.isWaypoint:
+            prob += lpSum(in_neighbors) - 2 * node.vars["x"] >= 0
+        else:
+            prob += lpSum(in_neighbors) + lpSum(out_neighbors) - 2 * node.vars["x"] >= 0
+
+        # Every active node must have at least one active outbound neighbor
+        prob += lpSum(out_neighbors) >= node.vars["x"]
 
     return prob
 
@@ -113,8 +138,8 @@ def config_solver(config):
     filename = config_filename(config)
     filepath = Path(os.path.dirname(__file__), "highs_output")
 
-    mips_tol = config["solver"]["mips_tol"]
-    mips_gap = config["solver"]["mips_gap"]
+    mips_tol = config["solver"].get("mips_tol", 1e-6)
+    mips_gap = config["solver"].get("mips_gap", 1e-5)
     if mips_gap == "auto":
         mips_gap = config["budget"] / 10_000
     time_limit = config["solver"]["time_limit"]
@@ -123,10 +148,10 @@ def config_solver(config):
         "parallel=on",
         "threads=16",
         f"time_limit={time_limit}",
-        f"mip_feasibility_tolerance={mips_tol}",
-        "mip_heuristic_effort=0.5",
-        f"mip_rel_gap={mips_gap}",
-        f"primal_feasibility_tolerance={mips_tol}",
+        "mip_feasibility_tolerance=1e-4",  # 1e-6 from config file
+        "primal_feasibility_tolerance=1e-4",  # 1e-6 from config file
+        # f"mip_rel_gap={mips_gap}",  # 1e-5 from this main()'s config
+        "mip_pool_soft_limit=5000",  # Leaving near default seems best. 892.66 on 501 w/7500 904 w/5000 Both w/1e-6 feas and default feas
         # "mip_improving_solution_save=on",
         # f"mip_improving_solution_file={filepath.joinpath("improvements", f'{filename}.sol')}",
         # f"write_model_file={filepath.joinpath("models", f"{filename}.lp")}",
@@ -201,7 +226,7 @@ def save_reproduction_data(config, prob, G):
     prob.to_json(new_path)
     print("Solved pulp model saved:", new_path)
 
-    old_path = filepath.parent.parent.joinpath("MaximizeEmpireValue-pulp.sol")
+    old_path = filepath.parent.parent.joinpath(f"{config["name"]}-pulp.sol")
     new_path = filepath.joinpath(f"{filename}_highs.sol")
     Path(old_path).rename(new_path)
     print("   HiGHS solution saved:", new_path)
@@ -236,22 +261,31 @@ def main(config):
     """
 
     # for budget in [10, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
-    #   5 =>         1       0         1 100.00%   13900824.11     13900824.11        0.00%       50     11     16      1112     1.1s
-    #  10 =>         1       0         1 100.00%   24954483.03     24954483.03        0.00%       16      9      0      5110     2.3s
-    #  20 =>       411       0       176 100.00%   44334018.51     44334018.51        0.00%     1703    212   5822    188489    43.4s
-    #  30 =>      3196       0      1525 100.00%   58546460.58972  58540725           0.01%     2019    362   9877     1311k   402.9s
-    #  50 =>      7503       0      2875 100.00%   84347183.61581  84340234.96        0.01%     1563    490   9500     2327k   741.6s
-    # 100 =>     25109       0      8871 100.00%   137576048.0629  137562435.03       0.01%     2679    697  10022     8194k  2447.9s
-    # 501 =>     70794       0     12509 100.00%   409742231.6859  409701270.7202     0.01%     3653    807   9906    25030k  7615.7s
+    #   5 =>         1       0         1 100.00%   13900824.11     13900824.11        0.00%       42      4     15       539     1.3s
+    #  10 =>         1       0         1 100.00%   24954483.03     24954483.03        0.00%      293     18     16      1136     0.7s
+    #  20 =>         1       0         1 100.00%   44334018.51     44334018.51        0.00%       48      5     18      2665     1.1s
+    #  30 =>         1       0         1 100.00%   58540725        58540725           0.00%       71     48    255     21461     8.7s
+    #  50 =>         7       0         4 100.00%   84340234.96     84340234.96        0.00%      175     87    730     44348    16.6s
+    # 100 =>      1865       0       814 100.00%   137568512.6988  137562435.03       0.00%     1311    222   4884    401490   134.5s
+    # 150 =>     12797       0      2652 100.00%   183029741.7658  183012954.78       0.01%     1540    335   4880     1971k   674.9s
+    # 200 =>     39435       0     18036 100.00%   222778830.6818  222756620.54       0.01%     2411    433   4846     9074k  2782.7s
+    # 250 =>     38701       0     15709 100.00%   260995924.6606  260969949.12       0.01%     2886    486   4868     7755k  2635.1s
+    # 300 =>     31674       0     11645 100.00%   297920432.924   297890668.77       0.01%     2253    463   4902     5684k  1804.5s
+    # 350 =>     25784       0     10578 100.00%   332070168.0292  332036997.45       0.01%     2154    338   5020     4910k  1630.9s
+    # 400 =>     19413       0      8167 100.00%   361375079.5188  361339029          0.01%     2528    501   4957     3624k  1233.6s
+    # 450 =>     37922       0     14616 100.00%   385985522.281   385946932.51       0.01%     2199    459   4973     7307k  2382.9s
+    # 501 =>     16940       0      6857 100.00%   409742237.0891  409701270.72       0.01%     2405    413   5303     3636k  1288.2s
 
-    for budget in [5, 10, 20, 30, 50]:
+    # for budget in [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
+    for budget in [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
+        config["name"] = "EmpireSolver"
         config["budget"] = budget
         config["top_n"] = 4
         config["nearest_n"] = 5
         config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = "SparsifyLeafPruning"
+        config["solver"]["file_prefix"] = "NewBestYetAgain"
         config["solver"]["file_suffix"] = ""
-        config["solver"]["mips_gap"] = "default"
+        config["solver"]["mips_gap"] = "0.00005"
         config["solver"]["time_limit"] = "46800"
         empire_solver(config)
 
