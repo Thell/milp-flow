@@ -8,6 +8,7 @@ import random
 from typing import List
 
 from pulp import LpVariable, lpSum, LpProblem, LpMaximize, HiGHS_CMD
+from empire_solver_par import HiGHS_CMD_PAR
 
 from generate_empire_data import (
     NodeType as NT,
@@ -20,28 +21,30 @@ from generate_empire_data import (
 logger = logging.getLogger(__name__)
 
 
+def filter_arcs(v, groupflow, arcs):
+    return [
+        var
+        for arc in arcs
+        for key, var in arc.vars.items()
+        if key.startswith("groupflow_") and (key == groupflow or v.isLodging)
+    ]
+
+
+def link_in_out_by_group(prob: LpProblem, v: Node, in_arcs: List[Arc], out_arcs: List[Arc]):
+    all_inflows = []
+    f = v.vars["f"]
+    for group in v.groups:
+        groupflow_key = f"groupflow_{group.id}"
+        inflows = filter_arcs(v, groupflow_key, in_arcs)
+        outflows = filter_arcs(v, groupflow_key, out_arcs)
+        prob += lpSum(inflows) == lpSum(outflows), f"balance_{groupflow_key}_at_{v.name()}"
+        all_inflows.append(inflows)
+    prob += f == lpSum(all_inflows), f"flow_{v.name()}"
+    prob += f <= v.ub * v.vars["x"], f"x_{v.name()}"
+
+
 def create_problem(config, G):
     """Create the problem and add the variables and constraints."""
-
-    def filter_arcs(groupflow, arcs):
-        return [
-            var
-            for arc in arcs
-            for key, var in arc.vars.items()
-            if key.startswith("groupflow_") and (key == groupflow or v.isLodging)
-        ]
-
-    def link_in_out_by_group(prob: LpProblem, v: Node, in_arcs: List[Arc], out_arcs: List[Arc]):
-        all_inflows = []
-        f = v.vars["f"]
-        for group in v.groups:
-            groupflow_key = f"groupflow_{group.id}"
-            inflows = filter_arcs(groupflow_key, in_arcs)
-            outflows = filter_arcs(groupflow_key, out_arcs)
-            prob += lpSum(inflows) == lpSum(outflows), f"balance_{groupflow_key}_at_{v.name()}"
-            all_inflows.append(inflows)
-        prob += f == lpSum(all_inflows), f"flow_{v.name()}"
-        prob += f <= v.ub * v.vars["x"], f"x_{v.name()}"
 
     prob = LpProblem(config["name"], LpMaximize)
 
@@ -102,12 +105,14 @@ def create_problem(config, G):
         in_neighbors = [arc.source.vars["x"] for arc in node.inbound_arcs]
         out_neighbors = [arc.destination.vars["x"] for arc in node.outbound_arcs]
 
-        if node.type in [NT.plant, NT.waypoint, NT.group]:
-            prob += lpSum(in_neighbors) >= lpSum(out_neighbors)
+        # All nodes should be 2-degree.
         if node.isWaypoint:
+            # Waypoint in/out neighbors are the same.
             prob += lpSum(in_neighbors) - 2 * node.vars["x"] >= 0
         else:
             prob += lpSum(in_neighbors) + lpSum(out_neighbors) - 2 * node.vars["x"] >= 0
+
+        # Every active node must have at least one active outbound neighbor
         prob += lpSum(out_neighbors) >= node.vars["x"]
 
     return prob
@@ -131,30 +136,33 @@ def config_solver(config):
     filename = config_filename(config)
     filepath = Path(os.path.dirname(__file__), "highs_output")
 
-    mips_tol = config["solver"].get("mips_tol", 1e-6)
-    mips_gap = config["solver"].get("mips_gap", 1e-5)
-    if mips_gap == "auto":
-        mips_gap = config["budget"] / 10_000
-    time_limit = config["solver"]["time_limit"]
-
     options = [
-        "parallel=on",
-        "threads=16",
-        f"time_limit={time_limit}",
+        f"time_limit={config["solver"]["time_limit"]}",
         f"random_seed={config["solver"]["random_seed"]}",
-        "mip_feasibility_tolerance=1e-4",  # 1e-6 from config file
-        "primal_feasibility_tolerance=1e-4",  # 1e-6 from config file
-        # f"mip_rel_gap={mips_gap}",  # 1e-5 from this main()'s config
+        f"mip_rel_gap={config["solver"]["mips_gap"]}",
+        f"mip_feasibility_tolerance={config["solver"]["mips_tol"]}",
+        f"primal_feasibility_tolerance={config["solver"]["mips_tol"]}",
         "mip_pool_soft_limit=5000",
     ]
     options = [o for o in options if "default" not in o]
 
-    solver = HiGHS_CMD(
-        path="/home/thell/HiGHS/build/bin/highs",
-        keepFiles=True,
-        options=options,
-        logPath=filepath.joinpath("logs", f"{filename}.log"),
-    )
+    if config["solver"]["num_processes"] == 1:
+        solver = HiGHS_CMD(
+            path="/home/thell/.local/bin/HiGHS",
+            msg=True,
+            keepFiles=True,
+            options=options,
+            logPath=filepath.joinpath("logs", f"{filename}.log"),
+        )
+    else:
+        solver = HiGHS_CMD_PAR(
+            path="/home/thell/.local/bin/HiGHS",
+            msg=False,
+            keepFiles=True,
+            options=options,
+            num_processes=config["solver"]["num_processes"],
+        )
+
     return solver
 
 
@@ -164,16 +172,17 @@ def print_solving_info_header(config, G: GraphData):
     top_n = config["top_n"]
     nearest_n = config["nearest_n"]
     waypoint_capacity = config["waypoint_capacity"]
+    num_proc = config["solver"]["num_processes"]
     mips_tol = config["solver"]["mips_tol"]
     mips_gap = config["solver"]["mips_gap"]
     if mips_gap == "auto":
         mips_gap = budget / 10_000
 
     logging.info(
-        f"\nSolving:    graph with {len(G['V'])} nodes and {len(G['E'])} arcs"
-        f"\n  Using:    budget: {budget}, lodging_bonus: {lodging_bonus}, top_n: {top_n},"
+        f"\nSolving:  graph with {len(G['V'])} nodes and {len(G['E'])} arcs"
+        f"\n  Using:  budget: {budget}, lodging_bonus: {lodging_bonus}, top_n: {top_n},"
         f" nearest_n: {nearest_n}, capacity: {waypoint_capacity}"
-        f"\n   With:    threads: 16, mip_feasibility_tolerance: {mips_tol}, gap: {mips_gap}"
+        f"\n   With:  feasibility_tolerance: {mips_tol}, gap: {mips_gap}, num_processes: {num_proc}"
     )
 
 
@@ -203,10 +212,15 @@ def print_solving_info_trailer(config, prob, G):
     )
 
 
-def save_reproduction_data(config, prob, G):
+def save_reproduction_data(log_file, config, prob, G):
     obj_value = round(prob.objective.value())
     filename = f"{config_filename(config)}_{obj_value}"
     filepath = Path(os.path.dirname(__file__), "highs_output")
+
+    old_path = filepath.parent.joinpath(log_file)
+    new_path = filepath.joinpath("logs", f"{filename}.log")
+    Path(old_path).rename(new_path)
+    print("         log file saved:", new_path)
 
     new_path = filepath.joinpath("models", f"{filename}.lp")
     prob.writeLP(new_path)
@@ -216,7 +230,7 @@ def save_reproduction_data(config, prob, G):
     prob.to_json(new_path)
     print("Solved pulp model saved:", new_path)
 
-    old_path = filepath.parent.parent.joinpath(f"{config["name"]}-pulp.sol")
+    old_path = filepath.parent.joinpath(f"{config["name"]}-pulp.sol")
     new_path = filepath.joinpath("solutions", f"{filename}_highs.sol")
     Path(old_path).rename(new_path)
     print("   HiGHS solution saved:", new_path)
@@ -237,10 +251,14 @@ def empire_solver(config):
     prob = create_problem(config, G)
 
     print_solving_info_header(config, G)
-    solver.solve(prob)
+    if config["solver"]["num_processes"] == 1:
+        solver.solve(prob)
+        log_file = solver.optionsDict["logPath"]
+    else:
+        _, log_file = prob.solve(solver)
     print_solving_info_trailer(config, prob, G)
 
-    save_reproduction_data(config, prob, G)
+    save_reproduction_data(log_file, config, prob, G)
 
 
 def main(config):
@@ -250,34 +268,37 @@ def main(config):
     waypoint_capacity: max loads on a waypoint
     """
 
-    # Var6 results
-    #   5 =>         1       0         1 100.00%   13900824.11     13900824.11        0.00%      107      9      5       563     1.6s
-    #  10 =>         1       0         1 100.00%   24954483.03     24954483.03        0.00%      217     11      4      1091     0.8s
-    #  20 =>         1       0         1 100.00%   44336605.295    44334018.51        0.01%       39      6      6      3157     1.5s
-    #  30 =>         1       0         1 100.00%   58540725        58540725           0.00%       39     22    305     11595     5.6s
-    #  50 =>         5       0         3 100.00%   84340234.96     84340234.96        0.00%       81     44    627     31409    11.8s
-    # 100 =>      1286       0       535 100.00%   137562435.03    137562435.03       0.00%      996    194   4867    277984    92.4s
-    # 150 =>      9449       0      3799 100.00%   183030044.3538  183012954.78       0.01%     1666    307   4873     1509k   572.9s
-    # 200 =>     34960       0     14080 100.00%   222778887.4344  222756620.54       0.01%     2092    449   4937     7365k  2749.1s
-    # 250 =>     36662       0     10922 100.00%   260995999.6362  260969949.12       0.01%     2650    496   5154     6371k  2559.2s
-    # 300 =>     30356       0     13247 100.00%   297920443.466   297890668.77       0.01%     2353    536   5328     5283k  1901.0s
-    # 350 =>     17919       0      8522 100.00%   332070195.4507  332036997.45       0.01%     1925    437   5151     3753k  1281.3s
-    # 400 =>     15475       0      5356 100.00%   361375133.5839  361339029          0.01%     2037    353   4947     2932k  1023.1s
-    # 450 =>     17917       0      6861 100.00%   385985476.6622  385946932.51       0.01%     2290    529   4941     3904k  1343.9s
-    # 501 =>     10849       0      3955 100.00%   409742166.3493  409701270.72       0.01%     2448    406   5017     2109k   767.0s
+    # Final results
+    #   5 =>         1       0         1 100.00%   13900824.11     13900824.11        0.00%       39      6      3       522     1.6s
+    #  10 =>         1       0         1 100.00%   24954483.03     24954483.03        0.00%      210      9      0      1037     0.9s
+    #  20 =>         1       0         1 100.00%   44334018.51     44334018.51        0.00%        3      0      0      2741     1.5s
+    #  30 =>         1       0         1 100.00%   58540725        58540725           0.00%      121     13     72      9847     4.3s
+    #  50 =>         6       0         3 100.00%   84340234.96     84340234.96        0.00%      103     54    463     37903    16.2s
+    # 100 =>      1054       0       476 100.00%   137569210.5721  137562435.03       0.00%     1099    167   4681    238685    97.8s (72)
+    # 150 =>      6204       0      2988 100.00%   183030694.898   183012954.78       0.01%     2028    338   5231     1253k   552.5s (541)
+    # 200 =>     22618       0      8945 100.00%   222778742.6519  222756620.54       0.01%     2036    411   4909     4677k  1954.2s (1957)
+    # 250 =>     24453       0      9140 100.00%   260996027.1117  260969949.12       0.01%     2699    405   4866     4228k  1922.6s (2365)
+    # 300 =>     23752       0      5666 100.00%   297920443.5496  297890668.77       0.01%     2198    400   4952     3979k  1762.8s (2230)
+    # 350 =>     21409       0      7579 100.00%   332061172.113   332028018.72       0.01%     2339    387   4930     3415k  1452.3s (1431)
+    # 400 =>     11294       0      3753 100.00%   361374766.5588  361339029          0.01%     2111    400   4987     1931k   895.6s (1127)
+    # 450 =>     11857       0      3466 100.00%   385949540.2905  385910949.29       0.01%     2259    299   4983     2152k   962.8s (1220)
+    # 501 =>      7639       0      3226 100.00%   409742164.9647  409701270.72       0.01%     2089    456   5134     1820k   804.5s (836)
 
-    # for budget in [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]:
-    # for budget in [375, 395, 415, 435, 455, 475, 495, 515]:
-    for budget in [300, 350, 400, 450, 501]:
-        config["name"] = "EmpireSolverTest1"
+    test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
+    bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
+    for budget in test_set + bench_set:
+        config["name"] = "Empire"
         config["budget"] = budget
-        config["top_n"] = 4
-        config["nearest_n"] = 5
-        config["waypoint_capacity"] = 25
-        config["solver"]["file_prefix"] = "Var1"
+        config["lodging_bonus"] = 5
+        config["top_n"] = 6
+        config["nearest_n"] = 7
+        config["waypoint_capacity"] = 35
+        config["solver"]["num_processes"] = 6
+        config["solver"]["file_prefix"] = "V6_lb5Test"
         config["solver"]["file_suffix"] = ""
-        config["solver"]["mips_gap"] = "0.0001"
-        config["solver"]["time_limit"] = "46800"
+        config["solver"]["mips_gap"] = "default"
+        config["solver"]["mips_tol"] = 1e-4
+        config["solver"]["time_limit"] = 46800
         config["solver"]["random_seed"] = random.randint(0, 2147483647)
         empire_solver(config)
 
