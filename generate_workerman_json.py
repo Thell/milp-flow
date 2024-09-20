@@ -236,7 +236,7 @@ def process_solution(config, prob):
 
     counts: Dict[str, Any] = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
     by_groups = {
-        str(ref_data["group_to_townname"]["name"][k]): v
+        str(ref_data["group_to_townname"][k]): v
         for k, v in Counter(origin_vars.values()).most_common()
     }
     counts["by_groups"] = by_groups
@@ -263,10 +263,14 @@ def generate_workerman_json(filestem):
 
 
 def main():
-    filestem = "sol_handling_b10_lb0_tn4_nn5_wc25_gdefault_24954483"
+    filestem = "filestem_name"
     generate_workerman_json(filestem)
 
 
 if __name__ == "__main__":
+    import os
+
+    os.makedirs("workerman_output", exist_ok=True)
+
     locale.setlocale(locale.LC_ALL, "")
     main()
