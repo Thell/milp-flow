@@ -206,6 +206,7 @@ def process_solution(config, prob):
     town_ids = set()
     workerman_user_workers = []
     root_ranks = []
+    stash_town_id = 601
     for k, v in origin_vars.items():
         town_id = ref_data["group_to_town"][v]
 
@@ -214,7 +215,7 @@ def process_solution(config, prob):
 
         origin = graph_data["V"][f"plant_{k}"]
         worker_data = origin.group_prizes[v]["worker_data"]
-        user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, int(town_id))
+        user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, stash_town_id)
         workerman_user_workers.append(user_worker)
 
         value = origin.group_prizes[v]["value"]

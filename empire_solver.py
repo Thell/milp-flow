@@ -294,7 +294,7 @@ def main(config):
         config["nearest_n"] = 7
         config["waypoint_capacity"] = 35
         config["solver"]["num_processes"] = 6
-        config["solver"]["file_prefix"] = "V6_lb5Test"
+        config["solver"]["file_prefix"] = ""
         config["solver"]["file_suffix"] = ""
         config["solver"]["mips_gap"] = "default"
         config["solver"]["mips_tol"] = 1e-4
@@ -306,4 +306,6 @@ def main(config):
 if __name__ == "__main__":
     with open("config.json", "r") as file:
         config = json.load(file)
+    for path in ["logs", "models", "solutions"]:
+        os.makedirs(f"highs_output/{path}", exist_ok=True)
     main(config)
