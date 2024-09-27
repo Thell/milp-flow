@@ -19,6 +19,13 @@ requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "UNLICENSE"}
 
+[project.scripts]
+milp-flow = "milp_flow.milp_flow:main"
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
 
 [tool.pdm]
-distribution = false
+distribution = true
