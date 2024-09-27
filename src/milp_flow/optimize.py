@@ -101,7 +101,8 @@ def optimize(data: dict, graph_data: GraphData) -> LpProblem:
 
     if num_processes == 1:
         print(f"Single process starting using {options}")
-        options["log_file"] = options["log_file"].as_posix()
+        if options["log_file"]:
+            options["log_file"] = options["log_file"].as_posix()
         solver = HiGHS()
         solver.optionsDict = options
         prob.solve(solver)
