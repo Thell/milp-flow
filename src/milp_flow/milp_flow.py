@@ -1,9 +1,10 @@
 # main.py
 
 from math import inf
+from pathlib import Path
 from random import randint
 
-
+import data_store as ds
 from initialize import initialize_data
 from generate_reference_data import generate_reference_data
 from generate_graph_data import generate_graph_data
@@ -11,7 +12,37 @@ from generate_workerman_data import generate_workerman_data
 from optimize import optimize
 
 
-lodging = {
+min_lodging = {
+    "Velia": 0,
+    "Heidel": 0,
+    "Glish": 0,
+    "Calpheon City": 0,
+    "Olvia": 0,
+    "Keplan": 0,
+    "Port Epheria": 0,
+    "Trent": 0,
+    "Iliya Island": 0,
+    "Altinova": 0,
+    "Tarif": 0,
+    "Valencia City": 0,
+    "Shakatu": 0,
+    "Sand Grain Bazaar": 0,
+    "Ancado Inner Harbor": 0,
+    "Arehaza": 0,
+    "Old Wisdom Tree": 0,
+    "Gr\u00e1na": 0,
+    "Duvencrune": 0,
+    "O'draxxia": 0,
+    "Eilton": 0,
+    "Dalbeol Village": 0,
+    "Nampo's Moodle Village": 0,
+    "Nopsae's Byeot County": 0,
+    "Muzgar": 0,
+    "Yukjo Street": 0,
+    "Godu Village": 0,
+    "Bukpo": 0,
+}
+max_lodging = {
     "Velia": 6,
     "Heidel": 6,
     "Glish": 5,
@@ -312,17 +343,24 @@ def main():
     # import sys
     # sys.activate_stack_trampoline("perf")
 
-    global lodging, modifiers, prices
+    import datetime
+    import json
+
+    global min_lodging, max_lodging, modifiers, prices
+    lodging = min_lodging
 
     initialize_data()
 
-    # test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
-    # bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
-    for budget in [400]:
+    today = datetime.datetime.now().strftime("%y%m%d_%H%M")
+    logfile = Path(ds.path()).parent.parent.parent.joinpath("zzz_out", "logs")
+    workerman_file = Path(ds.path()).parent.parent.parent.joinpath("zzz_out", "workerman")
+
+    test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
+    bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
+    for budget in test_set + bench_set:
         config = {
             "name": "Empire",
             "budget": budget,
-            "lodging_bonus": 0,
             "top_n": 4,
             "nearest_n": 5,
             "waypoint_ub": 25,
@@ -334,13 +372,18 @@ def main():
             "primal_feasibility_tolerance": 1e-4,
             "time_limit": inf,
             "random_seed": randint(0, 2147483647),
+            "log_file": logfile.joinpath(f"{budget}_{today}.log"),
+            # "log_file": "",
         }
         config["solver"] = solver_config
 
         data = generate_reference_data(config, prices, modifiers, lodging)
         graph_data = generate_graph_data(data)
         prob = optimize(data, graph_data)
-        generate_workerman_data(prob, lodging, data, graph_data)
+        workerman_json = generate_workerman_data(prob, lodging, data, graph_data)
+        filename = workerman_file.joinpath(f"{budget}_{today}.json")
+        with filename.open("w", encoding="utf-8") as data_file:
+            json.dump(workerman_json, data_file, indent=4)
 
 
 if __name__ == "__main__":

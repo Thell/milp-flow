@@ -1,5 +1,12 @@
 # CONSTRUCTION ZONE
 
+NOTE: This workshop is pretty much closed down and the work product is now
+
+https://github.com/Thell/bdo-empire
+
+
+----
+
 Current testing workflow:
 
 - edit `market.json`

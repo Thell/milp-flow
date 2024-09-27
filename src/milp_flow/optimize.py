@@ -92,6 +92,10 @@ def solve_par_worker(
     from random import randint
 
     options_dict["random_seed"] = randint(0, 2147483647)
+    if options_dict["log_file"]:
+        options_dict["log_file"] = (
+            options_dict["log_file"].with_suffix(f".{process_index}.log").as_posix()
+        )
     print(f"Process {process_index} starting using {options_dict}")
     solver = HiGHS()
     solver.optionsDict = options_dict
@@ -121,9 +125,16 @@ def solve_par(prob: LpProblem, options_dict: dict, num_processes: int) -> LpProb
         if process.is_alive():
             print(f"Terminating process: {i}")
             process.terminate()
+            if i != first_process and options_dict["log_file"]:
+                print(f"Clearing log from process: {i}")
+                options_dict["log_file"].with_suffix(f".{i}.log").unlink()
         process.join()
     print(f"Using results from process {first_process}")
     result = prob.from_dict(results[first_process])
+    if options_dict["log_file"]:
+        options_dict["log_file"].with_suffix(f".{first_process}.log").rename(
+            options_dict["log_file"]
+        )
     return result[1]
 
 
@@ -143,6 +154,7 @@ def optimize(data: dict, graph_data: GraphData) -> LpProblem:
 
     if num_processes == 1:
         print(f"Single process starting using {options}")
+        options["log_file"] = options["log_file"].as_posix()
         solver = HiGHS()
         solver.optionsDict = options
         prob.solve(solver)
