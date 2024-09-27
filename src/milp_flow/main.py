@@ -4,12 +4,12 @@ from math import inf
 from pathlib import Path
 from random import randint
 
-import data_store as ds
-from initialize import initialize_data
-from generate_reference_data import generate_reference_data
-from generate_graph_data import generate_graph_data
-from generate_workerman_data import generate_workerman_data
-from optimize import optimize
+import milp_flow.data_store as ds
+from milp_flow.initialize import initialize_data
+from milp_flow.generate_reference_data import generate_reference_data
+from milp_flow.generate_graph_data import generate_graph_data
+from milp_flow.generate_workerman_data import generate_workerman_data
+from milp_flow.optimize import optimize
 
 
 min_lodging = {
@@ -355,9 +355,10 @@ def main():
     logfile = Path(ds.path()).parent.parent.parent.joinpath("zzz_out", "logs")
     workerman_file = Path(ds.path()).parent.parent.parent.joinpath("zzz_out", "workerman")
 
-    test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
-    bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
-    for budget in test_set + bench_set:
+    # test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
+    # bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
+    # for budget in test_set + bench_set:
+    for budget in [10]:
         config = {
             "name": "Empire",
             "budget": budget,
@@ -372,8 +373,8 @@ def main():
             "primal_feasibility_tolerance": 1e-4,
             "time_limit": inf,
             "random_seed": randint(0, 2147483647),
-            "log_file": logfile.joinpath(f"{budget}_{today}.log"),
-            # "log_file": "",
+            # "log_file": logfile.joinpath(f"{budget}_{today}.log"),
+            "log_file": "",
         }
         config["solver"] = solver_config
 

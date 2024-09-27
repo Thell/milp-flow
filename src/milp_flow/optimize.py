@@ -2,8 +2,8 @@
 
 from pulp import HiGHS, LpVariable, lpSum, LpProblem, LpMaximize
 
-from generate_graph_data import Arc, GraphData, Node, NodeType as NT
-from optimize_par import solve_par
+from milp_flow.generate_graph_data import Arc, GraphData, Node, NodeType as NT
+from milp_flow.optimize_par import solve_par
 
 
 def filter_arcs(v: Node, groupflow: str, arcs: list[Arc]) -> list[Arc]:

@@ -1,7 +1,7 @@
 # generate_value_data.py
 
 from math import ceil
-import data_store as ds
+import milp_flow.data_store as ds
 
 
 def get_data_files(data: dict) -> None:

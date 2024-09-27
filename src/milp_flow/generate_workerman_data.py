@@ -8,7 +8,7 @@ import networkx as nx
 from pulp import LpProblem
 from tabulate import tabulate
 
-from generate_graph_data import GraphData
+from milp_flow.generate_graph_data import GraphData
 
 
 def get_workerman_json(workers, ref_data, lodging):
