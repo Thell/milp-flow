@@ -1,6 +1,7 @@
 import multiprocessing
 from multiprocessing import Queue
 from random import randint
+from time import sleep
 
 from pulp import HiGHS, LpProblem
 
@@ -14,6 +15,7 @@ def solve_par_worker(
             options_dict["log_file"].with_suffix(f".{process_index}.log").as_posix()
         )
     print(f"Process {process_index} starting using {options_dict}")
+    sleep(1)
     solver = HiGHS()
     solver.optionsDict = options_dict
     prob.solve(solver)
