@@ -7,9 +7,7 @@ from urllib import request
 
 
 def path() -> Path:
-    with importlib.resources.as_file(
-        importlib.resources.files("initialize").joinpath("data")
-    ) as path:
+    with importlib.resources.as_file(importlib.resources.files().joinpath("data")) as path:
         return path
 
 
@@ -71,3 +69,22 @@ def initialized(last_sha: str, filenames: list[str]) -> bool:
     filename = "git_commit.txt"
     current_sha = read_text(filename) if is_file(filename) else None
     return last_sha == current_sha and all(is_file(f) for f in filenames)
+
+
+def primal_path() -> Path:
+    with importlib.resources.as_file(importlib.resources.files().joinpath("presolved")) as path:
+        return path
+
+
+def is_primal(filename: str) -> bool:
+    return primal_path().joinpath(filename).is_file()
+
+
+def read_primal(filename: str) -> dict:
+    content = primal_path().joinpath(filename).read_text(encoding="utf-8")
+    return json.loads(content)
+
+
+def write_primal(filename: str, data: dict) -> None:
+    with primal_path().joinpath(filename).open("w", encoding="utf-8") as data_file:
+        json.dump(data, data_file, indent=4)

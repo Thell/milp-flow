@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:49290f554004387d9ee9920b7f6400379ee35f4ca3fce318c6147da5e59e0a87"
+content_hash = "sha256:bcb5acbc60dc1ecb22440b94f3080ac7f34e2a194b716c669bbb859904029a03"
 
 [[metadata.targets]]
 requires_python = ">=3.12"
@@ -331,6 +331,19 @@ groups = ["default"]
 files = [
     {file = "PuLP-2.9.0-py3-none-any.whl", hash = "sha256:ad6a9b566d8458f4d05f4bfe2cea59e32885dd1da6929a361be579222107987c"},
     {file = "pulp-2.9.0.tar.gz", hash = "sha256:2e30e6c0ef2c0edac185220e3e53faca62eb786a9bd68465208f05bc63e850f3"},
+]
+
+[[package]]
+name = "pyoptinterface"
+version = "0.2.8"
+requires_python = ">=3.8"
+summary = "Python interface to multiple optimization solvers"
+groups = ["default"]
+files = [
+    {file = "pyoptinterface-0.2.8-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:ec02437f434baf3e2e1f46fed75aa43dd02a28496e5e9a0b4c3d9b03f43dd809"},
+    {file = "pyoptinterface-0.2.8-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:8b8fc3af435eb010dabf258f3514f7007438200000520a9afc77ed9beaabd931"},
+    {file = "pyoptinterface-0.2.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7a928f9ac8fb79491f470cf52b54719f2e797311021ac3e4a4c73c6fef25e534"},
+    {file = "pyoptinterface-0.2.8-cp312-cp312-win_amd64.whl", hash = "sha256:13285ac5f54e82f91d10d777973e37b2e290313236f06e93318c07bb9158704d"},
 ]
 
 [[package]]
