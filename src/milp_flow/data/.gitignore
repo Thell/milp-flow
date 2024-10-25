@@ -3,5 +3,6 @@
 # Except this file
 !.gitignore
 
-# and exploration.json
+# explicitly track
 !exploration.json
+!all_lodging_storage.json
