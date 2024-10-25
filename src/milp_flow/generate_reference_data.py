@@ -20,7 +20,7 @@ def get_data_files(data: dict) -> None:
     # data["region_to_town"] = ds.read_json("town_node_translate.json")["tk2tnk"]
 
     # Can use either Region strings or Exploration strings for this.
-    data["region_to_townname"] = ds.read_json("warehouse_to_townname.json")
+    # data["region_to_townname"] = ds.read_json("warehouse_to_townname.json")
 
     # Will rename waypoint to exploration.
     data["exploration"] = {int(k): v for k, v in ds.read_json("exploration.json").items()}
@@ -51,10 +51,11 @@ def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
 
 def get_lodging_data(lodging: dict, data: dict) -> None:
     print("Generating lodging data...")
+    region_strings = ds.read_strings_csv("Regioninfo.csv")
     for region, lodgings in data["lodging_data"].items():
         if str(region) not in data["regions"]:
             continue
-        townname = data["region_to_townname"][str(region)]
+        townname = region_strings[region]
         max_lodging = 1 + lodging[townname] + max([int(k) for k in lodgings.keys()])
         data["lodging_data"][region]["max_ub"] = max_lodging
         data["lodging_data"][region]["lodging_bonus"] = lodging[townname]

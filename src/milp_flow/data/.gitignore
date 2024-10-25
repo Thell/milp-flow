@@ -6,3 +6,4 @@
 # explicitly track
 !exploration.json
 !all_lodging_storage.json
+!Regioninfo.csv

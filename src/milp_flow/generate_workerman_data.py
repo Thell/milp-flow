@@ -8,16 +8,18 @@ import networkx as nx
 from pulp import LpProblem
 from tabulate import tabulate
 
+import milp_flow.data_store as ds
 from milp_flow.generate_graph_data import GraphData
 
 
 def get_workerman_json(workers, ref_data, lodging):
     """Populate and return a standard 'dummy' instance of the workerman dict."""
+    region_strings = ds.read_strings_csv("Regioninfo.csv")
     lodgingP2W = {}
     for region in ref_data["regions"]:
-        if region in ref_data["region_to_townname"]:
-            townname = ref_data["region_to_townname"][region]
-            lodgingP2W[region] = lodging[townname]
+        # if region in ref_data["region_to_townname"]:
+        townname = region_strings[int(region)]
+        lodgingP2W[region] = lodging[townname]
     workerman_json = {
         "activateAncado": False,
         "lodgingP2W": lodgingP2W,
@@ -191,7 +193,8 @@ def generate_workerman_data(
 
     counts: dict = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
     counts["by_regions"] = {
-        str(data["region_to_townname"][k]): v for k, v in Counter(origin_vars.values()).most_common()
+        str(data["region_strings"][int(k)]): v
+        for k, v in Counter(origin_vars.values()).most_common()
     }
     costs = {
         "lodgings": sum(graph_data["V"][k].cost for k in lodging_vars.keys()),
