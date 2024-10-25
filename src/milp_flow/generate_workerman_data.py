@@ -135,8 +135,6 @@ def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph
     stash_town_id = 601
     for k, v in origin_vars.items():
         town_id = region_to_town[int(v)]
-        town_id_old = data["region_to_town"][v]
-        assert int(town_id) == int(town_id_old), f"New Data Mismatch! {town_id} != {town_id_old}"
         town_ids.add(town_id)
         distances.append(all_pairs[str(town_id)][k])
 

@@ -17,7 +17,7 @@ def get_data_files(data: dict) -> None:
 
     # Group is actually the affiliated region. Can use exploration.json for these.
     # data["town_to_region"] = ds.read_json("town_node_translate.json")["tnk2tk"]
-    data["region_to_town"] = ds.read_json("town_node_translate.json")["tk2tnk"]
+    # data["region_to_town"] = ds.read_json("town_node_translate.json")["tk2tnk"]
 
     # Can use either Region strings or Exploration strings for this.
     data["region_to_townname"] = ds.read_json("warehouse_to_townname.json")
@@ -46,7 +46,6 @@ def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
     data["plant_values"] = ds.read_json("node_values_per_town.json")
     data["plants"] = data["plant_values"].keys()
     data["regions"] = data["plant_values"][list(data["plants"])[0]].keys()
-    data["towns"] = [data["region_to_town"][w] for w in data["regions"]]
     data["max_ub"] = len(data["plants"])
 
 

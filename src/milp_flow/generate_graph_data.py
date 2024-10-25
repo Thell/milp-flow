@@ -205,7 +205,7 @@ def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
 
     - NodeType.INVALID indicates a node that is unused and not added to the graph.
     """
-    if node_id in ref_data["towns"]:
+    if ref_data["exploration"][int(node_id)]["is_town"]:
         return NodeType.town
     if ref_data["exploration"][int(node_id)]["is_workerman_plantzone"]:
         return NodeType.plant
@@ -379,13 +379,14 @@ def nearest_n_towns(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
 
     nearest_towns_dist = {}
     nearest_towns = {}
+    region_to_town = {v["region_key"]: k for k, v in ref_data["exploration"].items() if v["is_town"]}
 
     for node_id, node in G["V"].items():
         if node.isWaypoint or node.isTown:
             distances = []
             for region in G["R"].values():
-                town_id = ref_data["region_to_town"][region.id]
-                distances.append((region, all_pairs[node.id][town_id]))
+                town_id = region_to_town[int(region.id)]
+                distances.append((region, all_pairs[node.id][str(town_id)]))
             nearest_towns_dist[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
             nearest_towns[node_id] = [w for w, _ in nearest_towns_dist[node_id]]
 
