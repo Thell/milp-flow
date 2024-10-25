@@ -27,7 +27,7 @@ def get_data_files(data: dict) -> None:
     data["region_to_townname"] = ds.read_json("warehouse_to_townname.json")
 
     # Will rename waypoint to exploration.
-    data["waypoint_data"] = ds.read_json("exploration.json")
+    data["exploration"] = ds.read_json("exploration.json")
 
     # Won't need this since links are a part of exploration.json.
     data["waypoint_links"] = ds.read_json("deck_links.json")

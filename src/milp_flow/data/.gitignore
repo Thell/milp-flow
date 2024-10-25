@@ -2,3 +2,6 @@
 *
 # Except this file
 !.gitignore
+
+# and exploration.json
+!exploration.json

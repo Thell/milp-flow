@@ -180,7 +180,7 @@ def get_sparsified_link_graph(ref_data: Dict[str, Any]):
     for link in ref_data["waypoint_links"]:
         link_graph.add_edge(link[0], link[1])
     for node, data in link_graph.nodes(data=True):
-        data["weight"] = ref_data["waypoint_data"][str(node)]["CP"]
+        data["weight"] = ref_data["exploration"][str(node)]["need_exploration_point"]
         data["type"] = get_link_node_type(str(node), ref_data)
 
     # This removes the non-plant non-forced leaf nodes without repeated pruning.
@@ -255,10 +255,10 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             cost = 0
         case NodeType.plant:
             ub = 1
-            cost = ref_data["waypoint_data"][node_id]["CP"]
+            cost = ref_data["exploration"][node_id]["need_exploration_point"]
         case NodeType.waypoint | NodeType.town:
             ub = ref_data["config"]["waypoint_ub"]
-            cost = ref_data["waypoint_data"][node_id]["CP"]
+            cost = ref_data["exploration"][node_id]["need_exploration_point"]
         case NodeType.region:
             lodging_data = ref_data["lodging_data"][node_id]
             ub = lodging_data["max_ub"] + lodging_data["lodging_bonus"]

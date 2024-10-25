@@ -7,15 +7,14 @@ import milp_flow.data_store as ds
 workerman_data_filenames = [
     # Used for node value generation
     "distances_tk2pzk.json",
-    "plantzone.json",
+    # "plantzone.json", # replacing
     "plantzone_drops.json",
     "skills.json",
     "worker_static.json",
     # Used for empire data generation
-    "all_lodging_storage.json",
-    "deck_links.json",
-    "exploration.json",
-    "plantzone.json",
+    # "all_lodging_storage.json", # replacing
+    # "deck_links.json", # replacing
+    # "exploration.json", # replacing
 ]
 
 local_data_filenames = [
@@ -53,6 +52,7 @@ def extract_tk2tnk_from_js() -> None:
     ds.write_json("town_node_translate.json", json_data)
 
 
+# Remove this in favor of using exploration and region names.
 def extract_town_names() -> dict:
     url = "https://raw.githubusercontent.com/shrddr/workermanjs/refs/heads/main/data/loc.json"
     json_content = ds.request_content(url)
@@ -74,10 +74,12 @@ def initialize_workerman_data(last_sha: str) -> None:
         ds.download_json(filename)
         print("complete.")
 
-    print("Generating `town_node_translate.json`...", end="")
-    extract_tk2tnk_from_js()
-    print("complete.")
+    # This has been removed from workermanjs
+    # print("Generating `town_node_translate.json`...", end="")
+    # extract_tk2tnk_from_js()
+    # print("complete.")
 
+    # Will use proper strings file.
     print("Extracting town name list...", end="")
     town_names = extract_town_names()
     print("complete.")
