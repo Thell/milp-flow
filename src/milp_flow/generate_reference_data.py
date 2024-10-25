@@ -10,8 +10,8 @@ from milp_flow.generate_value_data import generate_value_data
 def get_data_files(data: dict) -> None:
     print("Reading data files...")
 
-    # Still need this.
-    data["plantzone_drops"] = ds.read_json("plantzone_drops.json")
+    # Still need this but only in value generation.
+    # data["plantzone_drops"] = {int(k): v for k, v in ds.read_json("plantzone_drops.json").items()}
 
     data["lodging_data"] = {int(k): v for k, v in ds.read_json("all_lodging_storage.json").items()}
 
@@ -37,11 +37,11 @@ def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
     encoded = json.dumps({"p": prices, "m": modifiers}).encode()
     latest_sha = hashlib.sha256(encoded).hexdigest()
 
-    if latest_sha == current_sha:
-        print("  ...re-using existing node values data.")
-    else:
-        generate_value_data(prices, modifiers, data)
-        ds.path().joinpath(sha_filename).write_text(latest_sha)
+    # if latest_sha == current_sha:
+    #     print("  ...re-using existing node values data.")
+    # else:
+    generate_value_data(prices, modifiers, data)
+    # ds.path().joinpath(sha_filename).write_text(latest_sha)
 
     data["plant_values"] = ds.read_json("node_values_per_town.json")
     data["plants"] = data["plant_values"].keys()

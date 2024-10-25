@@ -4,15 +4,21 @@ from math import ceil
 import milp_flow.data_store as ds
 
 
-def get_data_files(data: dict) -> None:
-    data["plantzone_drops"] = ds.read_json("plantzone_drops.json")
-    data["worker_skills"] = ds.read_json("skills.json")
-    data["worker_static"] = ds.read_json("worker_static.json")
-    data["distances_tk2pzk"] = ds.read_json("distances_tk2pzk.json")
+def get_data_files(data: dict) -> dict:
+    value_data = {"exploration": data["exploration"].copy()}
+    value_data["distances_tk2pzk"] = {
+        int(k): v for k, v in ds.read_json("distances_tk2pzk.json").items()
+    }
+    value_data["plantzone_drops"] = {
+        int(k): v for k, v in ds.read_json("plantzone_drops.json").items()
+    }
+    value_data["worker_skills"] = {int(k): v for k, v in ds.read_json("skills.json").items()}
+    value_data["worker_static"] = {int(k): v for k, v in ds.read_json("worker_static.json").items()}
+    return value_data
 
 
 def isGiant(charkey: int, data: dict) -> bool:
-    return data["worker_static"][str(charkey)]["species"] in [2, 4, 8]
+    return data["worker_static"][charkey]["species"] in [2, 4, 8]
 
 
 def skill_bonus(skill_set: list, data: dict) -> dict:
@@ -29,7 +35,7 @@ def skill_bonus(skill_set: list, data: dict) -> dict:
 def worker_stats(worker: dict, skill_set, data: dict) -> dict:
     bonus = skill_bonus(skill_set, data)
     wspd = worker["wspd"] + bonus["wspd"]
-    mspd_base = data["worker_static"][str(worker["charkey"])]["mspd"] / 100
+    mspd_base = data["worker_static"][worker["charkey"]]["mspd"] / 100
     mspd = mspd_base * ((worker["mspd"] / mspd_base) + bonus["mspd"] / 100)
     luck = worker["luck"] + bonus["luck"]
     return {"wspd": wspd, "mspd": mspd, "luck": luck}
@@ -67,7 +73,7 @@ def profitPzTownStats(
     if dist == 9999999:
         return 0
 
-    drop = data["plantzone_drops"][str(pzk)]
+    drop = data["plantzone_drops"][pzk]
     luckyPart = price_bunch(drop["lucky"], data)
     unluckyValue = price_bunch(drop["unlucky"], data)
     luckyValue = unluckyValue + luckyPart
@@ -107,7 +113,7 @@ def profit(
 
 
 def makeMedianChar(charkey: int, data: dict) -> dict:
-    stat = data["worker_static"][str(charkey)]
+    stat = data["worker_static"][charkey]
     pa_wspd = stat["wspd"]
     pa_mspdBonus = 0
     pa_luck = stat["luck"]
@@ -269,8 +275,7 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
 def generate_value_data(prices: dict, modifiers: dict, ref_data: dict) -> None:
     import multiprocessing as mp
 
-    data = {"exploration": ref_data["exploration"]}
-    get_data_files(data)
+    data = get_data_files(ref_data)
     data["market_value"] = prices
     data["modifiers"] = modifiers
 
@@ -300,9 +305,9 @@ def generate_value_data(prices: dict, modifiers: dict, ref_data: dict) -> None:
     # Make the output a plantzone keyed list sorted by value in descending order for 'top_n'
     output = {}
     for plantzone, town, result_data in results:
-        if str(plantzone) not in output:
-            output[str(plantzone)] = {}
-        output[str(plantzone)][str(town)] = result_data
+        if plantzone not in output:
+            output[plantzone] = {}
+        output[plantzone][town] = result_data
 
     # Sort the plantzone keyed list by value for 'top_n'
     for plantzone, warehouse_data in output.copy().items():
