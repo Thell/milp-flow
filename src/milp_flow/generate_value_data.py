@@ -5,7 +5,6 @@ import milp_flow.data_store as ds
 
 
 def get_data_files(data: dict) -> None:
-    data["plantzone"] = ds.read_json("plantzone.json")
     data["plantzone_drops"] = ds.read_json("plantzone_drops.json")
     data["worker_skills"] = ds.read_json("skills.json")
     data["worker_static"] = ds.read_json("worker_static.json")
@@ -75,7 +74,7 @@ def profitPzTownStats(
     unluckyValue_gi = price_bunch(drop["unlucky_gi"], data)
     luckyValue_gi = unluckyValue_gi + luckyPart
 
-    rgk = data["plantzone"][str(pzk)]["regiongroup"]
+    rgk = data["exploration"][pzk]["region_group_key"]
     modifier = data["modifiers"].get(str(rgk), 0)
     if modifier == "":
         modifier = 0
@@ -267,10 +266,10 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
     return step_results[0]
 
 
-def generate_value_data(prices: dict, modifiers: dict) -> None:
+def generate_value_data(prices: dict, modifiers: dict, ref_data: dict) -> None:
     import multiprocessing as mp
 
-    data = {}
+    data = {"exploration": ref_data["exploration"]}
     get_data_files(data)
     data["market_value"] = prices
     data["modifiers"] = modifiers
@@ -290,11 +289,8 @@ def generate_value_data(prices: dict, modifiers: dict) -> None:
 
         for dist_data in data["distances_tk2pzk"][town]:
             plantzone, dist = dist_data
-            if not data["plantzone"][str(plantzone)]["node"]["is_plantzone"]:
+            if not data["exploration"][plantzone]["is_workerman_plantzone"]:
                 continue
-            if data["plantzone"][str(plantzone)]["node"]["kind"] in [10, 12, 13]:
-                continue
-
             # Each task is a town-plantzone pair with related data
             tasks.append((town, plantzone, dist, median_workers, data))
 
