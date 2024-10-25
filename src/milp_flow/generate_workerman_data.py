@@ -14,10 +14,10 @@ from milp_flow.generate_graph_data import GraphData
 def get_workerman_json(workers, ref_data, lodging):
     """Populate and return a standard 'dummy' instance of the workerman dict."""
     lodgingP2W = {}
-    for group in ref_data["groups"]:
-        if group in ref_data["group_to_townname"]:
-            townname = ref_data["group_to_townname"][group]
-            lodgingP2W[group] = lodging[townname]
+    for region in ref_data["regions"]:
+        if region in ref_data["region_to_townname"]:
+            townname = ref_data["region_to_townname"][region]
+            lodgingP2W[region] = lodging[townname]
     workerman_json = {
         "activateAncado": False,
         "lodgingP2W": lodgingP2W,
@@ -90,7 +90,7 @@ def generate_graph(graph_data: GraphData, prob):
             continue
 
         u, v = None, None
-        if "groupflow_" in var_key and "_on_" in var_key:
+        if "regionflow_" in var_key and "_on_" in var_key:
             tmp = var_key.split("_on_")
             tmp = tmp[1].split("_to_")
             u = tmp[0]
@@ -133,18 +133,18 @@ def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph
     root_ranks = []
     stash_town_id = 601
     for k, v in origin_vars.items():
-        town_id = data["group_to_town"][v]
+        town_id = data["region_to_town"][v]
         town_ids.add(town_id)
         distances.append(all_pairs[town_id][k])
 
         origin = graph_data["V"][f"plant_{k}"]
-        worker_data = origin.group_prizes[v]["worker_data"]
+        worker_data = origin.region_prizes[v]["worker_data"]
         user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, stash_town_id)
         workerman_user_workers.append(user_worker)
 
-        value = origin.group_prizes[v]["value"]
-        worker = origin.group_prizes[v]["worker"]
-        root_rank = list(origin.group_prizes.keys()).index(v) + 1
+        value = origin.region_prizes[v]["value"]
+        worker = origin.region_prizes[v]["worker"]
+        root_rank = list(origin.region_prizes.keys()).index(v) + 1
         root_ranks.append(root_rank)
 
         origin_cost += origin.cost
@@ -167,7 +167,7 @@ def print_summary(outputs, counts: dict, costs: dict, total_value: float):
     outputs = natsort.natsorted(outputs, key=lambda x: (x["warehouse"], x["node"]))
     colalign = ("right", "right", "left", "right", "right")
     print(tabulate(outputs, headers="keys", colalign=colalign))
-    print("By Town:\n\n", tabulate([[k, v] for k, v in counts["by_groups"].items()]), "\n")
+    print("By Town:\n\n", tabulate([[k, v] for k, v in counts["by_regions"].items()]), "\n")
     print("  Lodging cost:", costs["lodgings"])
     print("  Worker Nodes:", counts["origins"], "cost:", costs["origins"])
     print("     Waypoints:", counts["waypoints"], "cost:", costs["waypoints"])
@@ -189,8 +189,8 @@ def generate_workerman_data(
     workerman_json = get_workerman_json(workerman_ordered_workers, data, lodging)
 
     counts: dict = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
-    counts["by_groups"] = {
-        str(data["group_to_townname"][k]): v for k, v in Counter(origin_vars.values()).most_common()
+    counts["by_regions"] = {
+        str(data["region_to_townname"][k]): v for k, v in Counter(origin_vars.values()).most_common()
     }
     costs = {
         "lodgings": sum(graph_data["V"][k].cost for k in lodging_vars.keys()),

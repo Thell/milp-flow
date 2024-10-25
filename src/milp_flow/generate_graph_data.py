@@ -8,11 +8,12 @@ import networkx as nx
 
 
 class GraphData(TypedDict):
-    V: Dict[str, Node]
-    E: Dict[tuple[str, str], Arc]
-    G: Dict[str, Node]
-    P: Dict[str, Node]
-    L: Dict[str, Node]
+    V: Dict[str, Node]  # All Nodes
+    E: Dict[tuple[str, str], Arc]  # All Arcs
+    F: Dict[str, Node]  # Force Active Nodes
+    R: Dict[str, Node]  # Region Nodes
+    L: Dict[str, Node]  # Lodging Nodes
+    P: Dict[str, Node]  # Plant Nodes
 
 
 class NodeType(IntEnum):
@@ -20,7 +21,7 @@ class NodeType(IntEnum):
     plant = auto()
     waypoint = auto()
     town = auto()
-    group = auto()
+    region = auto()
     lodging = auto()
     𝓣 = auto()
 
@@ -38,15 +39,15 @@ class Node:
         ub: int,
         lb: int = 0,
         cost: int = 0,
-        groups: List[Node] = [],
+        regions: List[Node] = [],
     ):
         self.id = id
         self.type = type
         self.ub = ub
         self.lb = lb
         self.cost = cost
-        self.group_prizes: Dict[str, Dict[str, Any]] = {}
-        self.groups = groups if groups else []
+        self.region_prizes: Dict[str, Dict[str, Any]] = {}
+        self.regions = regions if regions else []
         self.key = self.name()
         self.inbound_arcs: List[Arc] = []
         self.outbound_arcs: List[Arc] = []
@@ -55,7 +56,8 @@ class Node:
         self.isLodging = type == NodeType.lodging
         self.isTown = type == NodeType.town
         self.isWaypoint = type == NodeType.waypoint
-        self.isGroup = type == NodeType.group
+        self.isRegion = type == NodeType.region
+        self.isForceActive = False
 
     def name(self) -> str:
         if self.type in [NodeType.𝓢, NodeType.𝓣]:
@@ -78,23 +80,23 @@ class Node:
             "ub": self.ub,
             "lb": self.ub,
             "cost": self.cost,
-            "group_prizes": self.group_prizes,
-            "groups": [],
+            "region_prizes": self.region_prizes,
+            "regions": [],
             "inbound_arcs": [arc.key for arc in self.inbound_arcs],
             "outbound_arcs": [arc.key for arc in self.outbound_arcs],
             "vars": {},
         }
-        for node in self.groups:
+        for node in self.regions:
             if node is self:
-                obj_dict["groups"].append("self")
+                obj_dict["regions"].append("self")
             else:
-                obj_dict["groups"].append(node.name())
+                obj_dict["regions"].append(node.name())
         for k, v in self.vars.items():
             obj_dict["vars"][k] = v.to_dict()
         return obj_dict
 
     def __repr__(self) -> str:
-        return f"Node(name: {self.name()}, ub: {self.ub}, lb: {self.lb}, cost: {self.cost}, value: {self.group_prizes})"
+        return f"Node(name: {self.name()}, ub: {self.ub}, lb: {self.lb}, cost: {self.cost}, value: {self.region_prizes})"
 
     def __eq__(self, other) -> bool:
         return self.name() == other.name()
@@ -153,8 +155,8 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
         (NodeType.waypoint, NodeType.waypoint): (node_b.ub, node_a.ub),
         (NodeType.waypoint, NodeType.town): (node_b.ub, node_a.ub),
         (NodeType.town, NodeType.town): (node_b.ub, node_a.ub),
-        (NodeType.town, NodeType.group): (node_b.ub, 0),
-        (NodeType.group, NodeType.lodging): (node_b.ub, 0),
+        (NodeType.town, NodeType.region): (node_b.ub, 0),
+        (NodeType.region, NodeType.lodging): (node_b.ub, 0),
         (NodeType.lodging, NodeType.𝓣): (node_a.ub, 0),
     }
 
@@ -170,7 +172,7 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
             nodes[arc.destination.key].inbound_arcs.append(arc)
 
             if arc.destination.type is NodeType.lodging:
-                arc.destination.groups = [arc.source]
+                arc.destination.regions = [arc.source]
 
 
 def get_sparsified_link_graph(ref_data: Dict[str, Any]):
@@ -181,10 +183,15 @@ def get_sparsified_link_graph(ref_data: Dict[str, Any]):
         data["weight"] = ref_data["waypoint_data"][str(node)]["CP"]
         data["type"] = get_link_node_type(str(node), ref_data)
 
-    # This just removes the non-plant leaf nodes. Doing any other reductions reduces performance.
+    # This removes the non-plant non-forced leaf nodes without repeated pruning.
+    # Testing showed that doing any other reductions reduces performance.
     removal_nodes = []
     for node, data in link_graph.nodes(data=True):
-        if nx.degree(link_graph, node) == 1 and data["type"] is not NodeType.plant:
+        if (
+            nx.degree(link_graph, node) == 1
+            and data["type"] is not NodeType.plant
+            and node not in ref_data["force_active_node_ids"]
+        ):
             removal_nodes.append(node)
     if removal_nodes:
         link_graph.remove_nodes_from(removal_nodes)
@@ -234,12 +241,12 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
     """
     Generate, add and return node based on NodeType.
 
-    kwargs `plant` and `group` are required for supply nodes.
-    kwargs `ub` is required for group nodes.
-    kwargs `ub`, `cost` and `group` are required for lodging nodes.
+    kwargs `plant` and `region` are required for supply nodes.
+    kwargs `ub` is required for region nodes.
+    kwargs `ub`, `cost` and `region` are required for lodging nodes.
     """
 
-    groups = []
+    regions = []
     lb = 0
 
     match node_type:
@@ -252,7 +259,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
         case NodeType.waypoint | NodeType.town:
             ub = ref_data["config"]["waypoint_ub"]
             cost = ref_data["waypoint_data"][node_id]["CP"]
-        case NodeType.group:
+        case NodeType.region:
             lodging_data = ref_data["lodging_data"][node_id]
             ub = lodging_data["max_ub"] + lodging_data["lodging_bonus"]
             ub = min(ub, ref_data["config"]["waypoint_ub"])
@@ -265,7 +272,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             assert (
                 ub and (lb is not None) and (cost is not None) and root
             ), "Lodging nodes require 'ub', 'lb' 'cost' and 'root' kwargs."
-            groups = [root]
+            regions = [root]
         case NodeType.𝓣:
             ub = ref_data["max_ub"]
             cost = 0
@@ -273,10 +280,12 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             assert node_type is not NodeType.INVALID, "INVALID node type."
             return  # Unreachable: Stops pyright unbound error reporting.
 
-    node = Node(node_id, node_type, ub, lb, cost, groups)
+    node = Node(node_id, node_type, ub, lb, cost, regions)
     if node.key not in nodes:
-        if node.type is NodeType.group:
-            node.groups = [node]
+        if node_id in ref_data["force_active_node_ids"]:
+            node.isForceActive = True
+        if node.type is NodeType.region:
+            node.regions = [node]
         nodes[node.key] = node
 
     return nodes[node.key]
@@ -286,7 +295,7 @@ def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict
     """Process all waypoint links and add the nodes and arcs to the graph.
 
     Calls handlers for plant and town nodes to add plant value nodes and
-    group/lodging nodes with their respective source and sink arcs.
+    region/lodging nodes with their respective source and sink arcs.
     """
     link_graph = get_sparsified_link_graph(ref_data)
 
@@ -306,14 +315,14 @@ def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict
 def process_plant(
     nodes: Dict[str, Node], arcs: Dict[tuple, Arc], plant: Node, ref_data: Dict[str, Any]
 ):
-    """Add plant group values and arcs between the source and plant nodes."""
-    for i, (group_id, value_data) in enumerate(ref_data["plant_values"][plant.id].items(), 1):
+    """Add plant region values and arcs between the source and plant nodes."""
+    for i, (region_id, value_data) in enumerate(ref_data["plant_values"][plant.id].items(), 1):
         if i > ref_data["config"]["top_n"]:
             break
         if value_data["value"] == 0:
             continue
         value_data["value"]
-        plant.group_prizes[group_id] = value_data
+        plant.region_prizes[region_id] = value_data
 
     add_arcs(nodes, arcs, nodes["𝓢"], plant)
 
@@ -321,9 +330,9 @@ def process_plant(
 def process_town(
     nodes: Dict[str, Node], arcs: Dict[tuple, Arc], town: Node, ref_data: Dict[str, Any]
 ):
-    """Add town group and lodging nodes and arcs between the town and sink nodes."""
-    group_id = ref_data["town_to_group"][town.id]
-    lodging_data = ref_data["lodging_data"][group_id]
+    """Add town region and lodging nodes and arcs between the town and sink nodes."""
+    region_id = ref_data["town_to_region"][town.id]
+    lodging_data = ref_data["lodging_data"][region_id]
     lodging_bonus = lodging_data["lodging_bonus"]
 
     lodgings = [(1 + lodging_bonus, 0)]
@@ -337,22 +346,22 @@ def process_town(
         if current[0] + 1 >= ref_data["config"]["waypoint_ub"]:
             break
 
-    group_node = get_node(nodes, group_id, NodeType.group, ref_data, ub=lodgings[-1][0])
-    add_arcs(nodes, arcs, town, group_node)
+    region_node = get_node(nodes, region_id, NodeType.region, ref_data, ub=lodgings[-1][0])
+    add_arcs(nodes, arcs, town, region_node)
 
     lb = 0
     for ub, cost in lodgings:
         lodging_node = get_node(
             nodes,
-            f"{group_node.id}_for_{ub}",
+            f"{region_node.id}_for_{ub}",
             NodeType.lodging,
             ref_data,
             ub=ub,
             lb=lb,
             cost=cost,
-            root=group_node,
+            root=region_node,
         )
-        add_arcs(nodes, arcs, group_node, lodging_node)
+        add_arcs(nodes, arcs, region_node, lodging_node)
         add_arcs(nodes, arcs, lodging_node, nodes["𝓣"])
         lb = ub + 1
 
@@ -370,25 +379,25 @@ def nearest_n_towns(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
     for node_id, node in G["V"].items():
         if node.isWaypoint or node.isTown:
             distances = []
-            for group in G["G"].values():
-                town_id = ref_data["group_to_town"][group.id]
-                distances.append((group, all_pairs[node.id][town_id]))
+            for region in G["R"].values():
+                town_id = ref_data["region_to_town"][region.id]
+                distances.append((region, all_pairs[node.id][town_id]))
             nearest_towns_dist[node_id] = sorted(distances, key=lambda x: x[1])[:nearest_n]
             nearest_towns[node_id] = [w for w, _ in nearest_towns_dist[node_id]]
 
     return nearest_towns
 
 
-def finalize_groups(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
-    # All group nodes have now been generated, finalize groups entries
+def finalize_regions(ref_data: Dict[str, Any], G: GraphData, nearest_n: int):
+    # All region nodes have now been generated, finalize regions entries
     nearest_towns = nearest_n_towns(ref_data, G, nearest_n)
     for v in G["V"].values():
         if v.type in [NodeType.𝓢, NodeType.𝓣]:
-            v.groups = [w for w in G["G"].values()]
+            v.regions = [w for w in G["R"].values()]
         elif v.isWaypoint or v.isTown:
-            v.groups = [w for w in nearest_towns[v.key]]
+            v.regions = [w for w in nearest_towns[v.key]]
         elif v.isPlant:
-            v.groups = [w for w in G["G"].values() if w.id in v.group_prizes.keys()]
+            v.regions = [w for w in G["R"].values() if w.id in v.region_prizes.keys()]
 
 
 def generate_graph_data(ref_data):
@@ -404,10 +413,11 @@ def generate_graph_data(ref_data):
     G: GraphData = {
         "V": dict(sorted(nodes.items(), key=lambda item: item[1].type)),
         "E": dict(sorted(arcs.items(), key=lambda item: item[1].as_dict()["type"])),
-        "G": {k: v for k, v in nodes.items() if v.isGroup},
+        "R": {k: v for k, v in nodes.items() if v.isRegion},
         "P": {k: v for k, v in nodes.items() if v.isPlant},
         "L": {k: v for k, v in nodes.items() if v.isLodging},
+        "F": {k: v for k, v in nodes.items() if v.isForceActive},
     }
-    finalize_groups(ref_data, G, ref_data["config"]["nearest_n"])
+    finalize_regions(ref_data, G, ref_data["config"]["nearest_n"])
 
     return G
