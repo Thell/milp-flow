@@ -177,11 +177,17 @@ def add_arcs(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], node_a: Node, node_
 
 def get_sparsified_link_graph(ref_data: Dict[str, Any]):
     link_graph = nx.Graph()
-    for link in ref_data["waypoint_links"]:
-        link_graph.add_edge(link[0], link[1])
+    for origin, origin_data in ref_data["exploration"].items():
+        for link_key in origin_data["link_list"]:
+            destination = ref_data["exploration"].get(link_key, None)
+            if not destination or destination["is_plantzone"]:
+                continue
+            link_graph.add_edge(origin, link_key)
+    # for link in ref_data["waypoint_links"]:
+    #     link_graph.add_edge(link[0], link[1])
     for node, data in link_graph.nodes(data=True):
         data["weight"] = ref_data["exploration"][node]["need_exploration_point"]
-        data["type"] = get_link_node_type(str(node), ref_data)
+        data["type"] = get_link_node_type(node, ref_data)
 
     # This removes the non-plant non-forced leaf nodes without repeated pruning.
     # Testing showed that doing any other reductions reduces performance.
@@ -200,14 +206,14 @@ def get_sparsified_link_graph(ref_data: Dict[str, Any]):
     return link_graph
 
 
-def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
+def get_link_node_type(node_id: int, ref_data: Dict[str, Any]):
     """Return the NodeType of the given node_id node.
 
     - NodeType.INVALID indicates a node that is unused and not added to the graph.
     """
-    if ref_data["exploration"][int(node_id)]["is_town"]:
+    if ref_data["exploration"][node_id]["is_town"]:
         return NodeType.town
-    if ref_data["exploration"][int(node_id)]["is_workerman_plantzone"]:
+    if ref_data["exploration"][node_id]["is_workerman_plantzone"]:
         return NodeType.plant
     return NodeType.waypoint
 
@@ -217,8 +223,8 @@ def get_link_nodes(nodes, link, ref_data, link_graph):
         return (None, None)
 
     node_a_id, node_b_id = str(link[1]), str(link[0])
-    node_a_type = get_link_node_type(node_a_id, ref_data)
-    node_b_type = get_link_node_type(node_b_id, ref_data)
+    node_a_type = get_link_node_type(int(node_a_id), ref_data)
+    node_b_type = get_link_node_type(int(node_b_id), ref_data)
 
     # Ensure arc node order.
     if node_a_type > node_b_type:
@@ -297,17 +303,23 @@ def process_links(nodes: Dict[str, Node], arcs: Dict[tuple, Arc], ref_data: Dict
     """
     link_graph = get_sparsified_link_graph(ref_data)
 
-    for link in ref_data["waypoint_links"]:
-        source, destination = get_link_nodes(nodes, link, ref_data, link_graph)
-        if source is None or destination is None:
-            continue
+    for source_key, source_data in ref_data["exploration"].items():
+        for destination_key in source_data["link_list"]:
+            if destination_key not in ref_data["exploration"]:
+                continue
 
-        add_arcs(nodes, arcs, source, destination)
+            source, destination = get_link_nodes(
+                nodes, (source_key, destination_key), ref_data, link_graph
+            )
+            if source is None or destination is None:
+                continue
 
-        if source.isPlant:
-            process_plant(nodes, arcs, source, ref_data)
-        if destination.isTown:
-            process_town(nodes, arcs, destination, ref_data)
+            add_arcs(nodes, arcs, source, destination)
+
+            if source.isPlant:
+                process_plant(nodes, arcs, source, ref_data)
+            if destination.isTown:
+                process_town(nodes, arcs, destination, ref_data)
 
 
 def process_plant(

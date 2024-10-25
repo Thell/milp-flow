@@ -26,7 +26,7 @@ def get_data_files(data: dict) -> None:
     data["exploration"] = {int(k): v for k, v in ds.read_json("exploration.json").items()}
 
     # Won't need this since links are a part of exploration.json.
-    data["waypoint_links"] = ds.read_json("deck_links.json")
+    # data["waypoint_links"] = ds.read_json("deck_links.json")
 
 
 def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
