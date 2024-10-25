@@ -180,7 +180,7 @@ def get_sparsified_link_graph(ref_data: Dict[str, Any]):
     for link in ref_data["waypoint_links"]:
         link_graph.add_edge(link[0], link[1])
     for node, data in link_graph.nodes(data=True):
-        data["weight"] = ref_data["exploration"][str(node)]["need_exploration_point"]
+        data["weight"] = ref_data["exploration"][node]["need_exploration_point"]
         data["type"] = get_link_node_type(str(node), ref_data)
 
     # This removes the non-plant non-forced leaf nodes without repeated pruning.
@@ -207,7 +207,7 @@ def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
     """
     if node_id in ref_data["towns"]:
         return NodeType.town
-    if ref_data["exploration"][node_id]["is_workerman_plantzone"]:
+    if ref_data["exploration"][int(node_id)]["is_workerman_plantzone"]:
         return NodeType.plant
     return NodeType.waypoint
 
@@ -253,12 +253,12 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             cost = 0
         case NodeType.plant:
             ub = 1
-            cost = ref_data["exploration"][node_id]["need_exploration_point"]
+            cost = ref_data["exploration"][int(node_id)]["need_exploration_point"]
         case NodeType.waypoint | NodeType.town:
             ub = ref_data["config"]["waypoint_ub"]
-            cost = ref_data["exploration"][node_id]["need_exploration_point"]
+            cost = ref_data["exploration"][int(node_id)]["need_exploration_point"]
         case NodeType.region:
-            lodging_data = ref_data["lodging_data"][node_id]
+            lodging_data = ref_data["lodging_data"][int(node_id)]
             ub = lodging_data["max_ub"] + lodging_data["lodging_bonus"]
             ub = min(ub, ref_data["config"]["waypoint_ub"])
             cost = 0
@@ -278,7 +278,7 @@ def get_node(nodes, node_id: str, node_type: NodeType, ref_data: Dict[str, Any],
             assert node_type is not NodeType.INVALID, "INVALID node type."
             return  # Unreachable: Stops pyright unbound error reporting.
 
-    node = Node(node_id, node_type, ub, lb, cost, regions)
+    node = Node(str(node_id), node_type, ub, lb, cost, regions)
     if node.key not in nodes:
         if node_id in ref_data["force_active_node_ids"]:
             node.isForceActive = True
@@ -329,8 +329,14 @@ def process_town(
     nodes: Dict[str, Node], arcs: Dict[tuple, Arc], town: Node, ref_data: Dict[str, Any]
 ):
     """Add town region and lodging nodes and arcs between the town and sink nodes."""
-    region_id = ref_data["town_to_region"][town.id]
-    lodging_data = ref_data["lodging_data"][region_id]
+    exploration_node = ref_data["exploration"][int(town.id)]
+    if not exploration_node["is_worker_npc_town"]:
+        return
+
+    region_key = exploration_node["region_key"]
+    lodging_data = ref_data["lodging_data"].get(region_key, None)
+    if lodging_data is None:
+        print("No lodging data found for:", exploration_node)
     lodging_bonus = lodging_data["lodging_bonus"]
 
     lodgings = [(1 + lodging_bonus, 0)]
@@ -344,7 +350,7 @@ def process_town(
         if current[0] + 1 >= ref_data["config"]["waypoint_ub"]:
             break
 
-    region_node = get_node(nodes, region_id, NodeType.region, ref_data, ub=lodgings[-1][0])
+    region_node = get_node(nodes, region_key, NodeType.region, ref_data, ub=lodgings[-1][0])
     add_arcs(nodes, arcs, town, region_node)
 
     lb = 0

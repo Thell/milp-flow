@@ -123,6 +123,7 @@ def extract_solution(prob) -> tuple[dict, dict, dict]:
 
 def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph: nx.DiGraph):
     all_pairs = dict(nx.all_pairs_bellman_ford_path_length(graph, weight="weight"))
+    region_to_town = {v["region_key"]: k for k, v in data["exploration"].items() if v["is_town"]}
 
     calculated_value = 0
     distances = []
@@ -133,9 +134,11 @@ def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph
     root_ranks = []
     stash_town_id = 601
     for k, v in origin_vars.items():
-        town_id = data["region_to_town"][v]
+        town_id = region_to_town[int(v)]
+        town_id_old = data["region_to_town"][v]
+        assert int(town_id) == int(town_id_old), f"New Data Mismatch! {town_id} != {town_id_old}"
         town_ids.add(town_id)
-        distances.append(all_pairs[town_id][k])
+        distances.append(all_pairs[str(town_id)][k])
 
         origin = graph_data["V"][f"plant_{k}"]
         worker_data = origin.region_prizes[v]["worker_data"]

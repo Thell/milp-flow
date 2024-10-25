@@ -13,18 +13,17 @@ def get_data_files(data: dict) -> None:
     # Still need this.
     data["plantzone_drops"] = ds.read_json("plantzone_drops.json")
 
-    # Will use the all_lodging_storage.json from housecraft
-    data["lodging_data"] = ds.read_json("all_lodging_storage.json")
+    data["lodging_data"] = {int(k): v for k, v in ds.read_json("all_lodging_storage.json").items()}
 
     # Group is actually the affiliated region. Can use exploration.json for these.
-    data["town_to_region"] = ds.read_json("town_node_translate.json")["tnk2tk"]
+    # data["town_to_region"] = ds.read_json("town_node_translate.json")["tnk2tk"]
     data["region_to_town"] = ds.read_json("town_node_translate.json")["tk2tnk"]
 
     # Can use either Region strings or Exploration strings for this.
     data["region_to_townname"] = ds.read_json("warehouse_to_townname.json")
 
     # Will rename waypoint to exploration.
-    data["exploration"] = ds.read_json("exploration.json")
+    data["exploration"] = {int(k): v for k, v in ds.read_json("exploration.json").items()}
 
     # Won't need this since links are a part of exploration.json.
     data["waypoint_links"] = ds.read_json("deck_links.json")
@@ -54,9 +53,9 @@ def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
 def get_lodging_data(lodging: dict, data: dict) -> None:
     print("Generating lodging data...")
     for region, lodgings in data["lodging_data"].items():
-        if region not in data["regions"]:
+        if str(region) not in data["regions"]:
             continue
-        townname = data["region_to_townname"][region]
+        townname = data["region_to_townname"][str(region)]
         max_lodging = 1 + lodging[townname] + max([int(k) for k in lodgings.keys()])
         data["lodging_data"][region]["max_ub"] = max_lodging
         data["lodging_data"][region]["lodging_bonus"] = lodging[townname]
