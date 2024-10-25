@@ -268,20 +268,20 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
 
 
 def generate_value_data(prices: dict, modifiers: dict) -> None:
+    import multiprocessing as mp
+
     data = {}
     get_data_files(data)
     data["market_value"] = prices
     data["modifiers"] = modifiers
 
-    # Workerman sorts by nearest node to town.
-    for town in data["distances_tk2pzk"]:
-        data["distances_tk2pzk"][town] = sorted(data["distances_tk2pzk"][town], key=lambda x: x[0])
-
-    output = {}
+    tasks = []
     for town in data["distances_tk2pzk"].keys():
         if town in ["1375"]:
             continue
 
+        # TODO: Cache median workers at the town level then
+        # filter by worker_type intersection at the plantzone level.
         median_workers = {
             "giant": medianGiant(town, data),
             "goblin": medianGoblin(town, data),
@@ -292,32 +292,44 @@ def generate_value_data(prices: dict, modifiers: dict) -> None:
             plantzone, dist = dist_data
             if not data["plantzone"][str(plantzone)]["node"]["is_plantzone"]:
                 continue
-            if data["plantzone"][str(plantzone)]["node"]["kind"] in [12, 13]:
+            if data["plantzone"][str(plantzone)]["node"]["kind"] in [10, 12, 13]:
                 continue
 
-            optimized_workers = {
-                "giant": optimize_skills(town, plantzone, dist, median_workers["giant"], data),
-                "goblin": optimize_skills(town, plantzone, dist, median_workers["goblin"], data),
-                "human": optimize_skills(town, plantzone, dist, median_workers["human"], data),
-            }
-            optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
+            # Each task is a town-plantzone pair with related data
+            tasks.append((town, plantzone, dist, median_workers, data))
 
-            if str(plantzone) not in output:
-                output[str(plantzone)] = {}
-            output[str(plantzone)][str(town)] = {}
-            output[str(plantzone)][str(town)]["worker"] = optimized_worker[0]
-            output[str(plantzone)][str(town)]["value"] = optimized_worker[1]["profit"]
-            output[str(plantzone)][str(town)]["worker_data"] = median_workers[
-                optimized_worker[0]
-            ].copy()
-            output[str(plantzone)][str(town)]["worker_data"]["skills"] = [
-                int(s) for s in optimized_worker[1]["skills"].copy()
-            ]
+    with mp.Pool(mp.cpu_count()) as pool:
+        results = pool.starmap(optimize_worker, tasks)
 
-    # Make the list a plantzone keyed list sorted by value in descending order for 'top_n'
+    # Make the output a plantzone keyed list sorted by value in descending order for 'top_n'
+    output = {}
+    for plantzone, town, result_data in results:
+        if str(plantzone) not in output:
+            output[str(plantzone)] = {}
+        output[str(plantzone)][str(town)] = result_data
+
+    # Sort the plantzone keyed list by value for 'top_n'
     for plantzone, warehouse_data in output.copy().items():
         output[plantzone] = dict(
             sorted(warehouse_data.items(), key=lambda x: x[1]["value"], reverse=True)
         )
 
     ds.write_json("node_values_per_town.json", output)
+
+
+def optimize_worker(town, plantzone, dist, median_workers, data):
+    optimized_workers = {
+        "giant": optimize_skills(town, plantzone, dist, median_workers["giant"], data),
+        "goblin": optimize_skills(town, plantzone, dist, median_workers["goblin"], data),
+        "human": optimize_skills(town, plantzone, dist, median_workers["human"], data),
+    }
+    optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
+
+    result_data = {
+        "worker": optimized_worker[0],
+        "value": optimized_worker[1]["profit"],
+        "worker_data": median_workers[optimized_worker[0]].copy(),
+    }
+    result_data["worker_data"]["skills"] = [int(s) for s in optimized_worker[1]["skills"].copy()]
+
+    return (plantzone, town, result_data)
