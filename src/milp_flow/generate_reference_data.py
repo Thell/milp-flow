@@ -10,9 +10,6 @@ from milp_flow.generate_value_data import generate_value_data
 def get_data_files(data: dict) -> None:
     print("Reading data files...")
 
-    # Wont need this since is_workerman_plantzone will be in exploration.json
-    data["all_plantzones"] = ds.read_json("plantzone.json")
-
     # Still need this.
     data["plantzone_drops"] = ds.read_json("plantzone_drops.json")
 

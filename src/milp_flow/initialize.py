@@ -7,7 +7,6 @@ import milp_flow.data_store as ds
 workerman_data_filenames = [
     # Used for node value generation
     "distances_tk2pzk.json",
-    # "plantzone.json", # replacing
     "plantzone_drops.json",
     "skills.json",
     "worker_static.json",

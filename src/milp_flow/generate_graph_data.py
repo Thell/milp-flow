@@ -207,9 +207,7 @@ def get_link_node_type(node_id: str, ref_data: Dict[str, Any]):
     """
     if node_id in ref_data["towns"]:
         return NodeType.town
-    if node_id in ref_data["all_plantzones"]:
-        if node_id not in ref_data["plants"]:
-            return NodeType.INVALID
+    if ref_data["exploration"][node_id]["is_workerman_plantzone"]:
         return NodeType.plant
     return NodeType.waypoint
 
