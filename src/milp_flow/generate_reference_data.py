@@ -10,23 +10,9 @@ from milp_flow.generate_value_data import generate_value_data
 def get_data_files(data: dict) -> None:
     print("Reading data files...")
 
-    # Still need this but only in value generation.
-    # data["plantzone_drops"] = {int(k): v for k, v in ds.read_json("plantzone_drops.json").items()}
-
-    data["lodging_data"] = {int(k): v for k, v in ds.read_json("all_lodging_storage.json").items()}
-
-    # Group is actually the affiliated region. Can use exploration.json for these.
-    # data["town_to_region"] = ds.read_json("town_node_translate.json")["tnk2tk"]
-    # data["region_to_town"] = ds.read_json("town_node_translate.json")["tk2tnk"]
-
-    # Can use either Region strings or Exploration strings for this.
-    # data["region_to_townname"] = ds.read_json("warehouse_to_townname.json")
-
-    # Will rename waypoint to exploration.
     data["exploration"] = {int(k): v for k, v in ds.read_json("exploration.json").items()}
-
-    # Won't need this since links are a part of exploration.json.
-    # data["waypoint_links"] = ds.read_json("deck_links.json")
+    data["lodging_data"] = {int(k): v for k, v in ds.read_json("all_lodging_storage.json").items()}
+    data["region_strings"] = {int(k): v for k, v in ds.read_strings_csv("Regioninfo.csv").items()}
 
 
 def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
