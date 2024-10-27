@@ -337,6 +337,10 @@ prices = {
     "820136": 329,
     "820138": 1350,
 }
+grindTakenList = [
+    724,  # Hexe Sanctuary
+    1704,  # Stars End
+]
 
 
 def main():
@@ -378,7 +382,7 @@ def main():
         }
         config["solver"] = solver_config
 
-        data = generate_reference_data(config, prices, modifiers, lodging)
+        data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
         graph_data = generate_graph_data(data)
         prob = optimize(data, graph_data)
         workerman_json = generate_workerman_data(prob, lodging, data, graph_data)
