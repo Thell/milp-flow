@@ -23,11 +23,11 @@ def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
     encoded = json.dumps({"p": prices, "m": modifiers}).encode()
     latest_sha = hashlib.sha256(encoded).hexdigest()
 
-    # if latest_sha == current_sha:
-    #     print("  ...re-using existing node values data.")
-    # else:
-    generate_value_data(prices, modifiers, data)
-    # ds.path().joinpath(sha_filename).write_text(latest_sha)
+    if latest_sha == current_sha:
+        print("  ...re-using existing node values data.")
+    else:
+        generate_value_data(prices, modifiers, data)
+    ds.path().joinpath(sha_filename).write_text(latest_sha)
 
     data["plant_values"] = ds.read_json("node_values_per_town.json")
 
@@ -62,10 +62,6 @@ def generate_reference_data(
         if v["is_worker_npc_town"] or v["is_warehouse_town"]
     }
 
-    import time
-
-    start = time.time()
     get_value_data(prices, modifiers, data)
-    print("Time taken:", time.time() - start)
     get_lodging_data(lodging, data)
     return data
