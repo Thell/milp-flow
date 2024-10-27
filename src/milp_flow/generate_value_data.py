@@ -4,16 +4,25 @@ from math import ceil
 import milp_flow.data_store as ds
 
 
-def get_data_files(data: dict) -> dict:
-    value_data = {"exploration": data["exploration"].copy()}
-    value_data["distances_tk2pzk"] = {
-        int(k): v for k, v in ds.read_json("distances_tk2pzk.json").items()
-    }
-    value_data["plantzone_drops"] = {
-        int(k): v for k, v in ds.read_json("plantzone_drops.json").items()
-    }
-    value_data["worker_skills"] = {int(k): v for k, v in ds.read_json("skills.json").items()}
-    value_data["worker_static"] = {int(k): v for k, v in ds.read_json("worker_static.json").items()}
+def string_keys_to_ints(d):
+    new_dict = {}
+    for key, value in d.items():
+        if isinstance(key, str) and key.isdigit():
+            key = int(key)
+        if isinstance(value, dict):
+            value = string_keys_to_ints(value)
+        new_dict[key] = value
+    return dict(list(new_dict.items()))
+
+
+def get_data_files(data: dict, prices: dict, modifiers: dict) -> dict:
+    value_data = data.copy()
+    value_data["market_value"] = string_keys_to_ints(prices)
+    value_data["modifiers"] = string_keys_to_ints(modifiers)
+    value_data["distances_tk2pzk"] = string_keys_to_ints(ds.read_json("distances_tk2pzk.json"))
+    value_data["plantzone_drops"] = string_keys_to_ints(ds.read_json("plantzone_drops.json"))
+    value_data["worker_skills"] = string_keys_to_ints(ds.read_json("skills.json"))
+    value_data["worker_static"] = string_keys_to_ints(ds.read_json("worker_static.json"))
     return value_data
 
 
@@ -70,9 +79,6 @@ def price_lerp(lucky_price: float, unlucky_price: float, luck: float) -> float:
 def profitPzTownStats(
     pzk: int, _tnk, dist: float, wspd: float, mspd: float, luck: float, is_giant: bool, data: dict
 ) -> float:
-    if dist == 9999999:
-        return 0
-
     drop = data["plantzone_drops"][pzk]
     luckyPart = price_bunch(drop["lucky"], data)
     unluckyValue = price_bunch(drop["unlucky"], data)
@@ -81,7 +87,7 @@ def profitPzTownStats(
     luckyValue_gi = unluckyValue_gi + luckyPart
 
     rgk = data["exploration"][pzk]["region_group_key"]
-    modifier = data["modifiers"].get(str(rgk), 0)
+    modifier = data["modifiers"].get(rgk, 0)
     if modifier == "":
         modifier = 0
 
@@ -96,12 +102,12 @@ def profitPzTownStats(
 
 
 def profit(
-    town: str, plantzone: int, dist: float, worker: dict, skill_set: list, data: dict
+    region: int, plantzone: int, dist: float, worker: dict, skill_set: list, data: dict
 ) -> float:
     stats = worker_stats(worker, skill_set, data)
     priceDaily = profitPzTownStats(
         plantzone,
-        town,
+        region,
         dist,
         stats["wspd"],
         stats["mspd"],
@@ -112,100 +118,7 @@ def profit(
     return priceDaily
 
 
-def makeMedianChar(charkey: int, data: dict) -> dict:
-    stat = data["worker_static"][charkey]
-    pa_wspd = stat["wspd"]
-    pa_mspdBonus = 0
-    pa_luck = stat["luck"]
-
-    for _ in range(2, 41):
-        pa_wspd += (stat["wspd_lo"] + stat["wspd_hi"]) / 2
-        pa_mspdBonus += (stat["mspd_lo"] + stat["mspd_hi"]) / 2
-        pa_luck += (stat["luck_lo"] + stat["luck_hi"]) / 2
-    pa_mspd = stat["mspd"] * (1 + pa_mspdBonus / 1e6)
-
-    return {
-        "wspd": round(pa_wspd / 1e6 * 100) / 100,
-        "mspd": round(pa_mspd) / 100,
-        "luck": round(pa_luck / 1e4 * 100) / 100,
-        "charkey": charkey,
-        "isGiant": isGiant(charkey, data),
-    }
-
-
-def medianGoblin(tnk: int, data: dict) -> dict:
-    if tnk == 1623:
-        return makeMedianChar(8003, data)  # grana
-    if tnk == 1604:
-        return makeMedianChar(8003, data)  # owt
-    if tnk == 1691:
-        return makeMedianChar(8023, data)  # oddy
-    if tnk == 1750:
-        return makeMedianChar(8035, data)  # eilton
-    if tnk == 1781:
-        return makeMedianChar(8050, data)  # lotml
-    if tnk == 1785:
-        return makeMedianChar(8050, data)  # lotml
-    if tnk == 1795:
-        return makeMedianChar(8050, data)  # lotml
-    if tnk == 1857:
-        return makeMedianChar(8050, data)  # lotml2
-    if tnk == 1858:
-        return makeMedianChar(8050, data)  # lotml2
-    if tnk == 1853:
-        return makeMedianChar(8050, data)  # lotml2
-    return makeMedianChar(7572, data)
-
-
-def medianGiant(tnk: int, data: dict) -> dict:
-    if tnk == 1623:
-        return makeMedianChar(8006, data)  # grana
-    if tnk == 1604:
-        return makeMedianChar(8006, data)  # owt
-    if tnk == 1691:
-        return makeMedianChar(8027, data)  # oddy
-    if tnk == 1750:
-        return makeMedianChar(8039, data)  # eilton
-    if tnk == 1781:
-        return makeMedianChar(8058, data)  # lotml
-    if tnk == 1785:
-        return makeMedianChar(8058, data)  # lotml
-    if tnk == 1795:
-        return makeMedianChar(8058, data)  # lotml
-    if tnk == 1857:
-        return makeMedianChar(8058, data)  # lotml2
-    if tnk == 1858:
-        return makeMedianChar(8058, data)  # lotml2
-    if tnk == 1853:
-        return makeMedianChar(8058, data)  # lotml2
-    return makeMedianChar(7571, data)
-
-
-def medianHuman(tnk: int, data: dict) -> dict:
-    if tnk == 1623:
-        return makeMedianChar(8009, data)  # grana
-    if tnk == 1604:
-        return makeMedianChar(8009, data)  # owt
-    if tnk == 1691:
-        return makeMedianChar(8031, data)  # oddy
-    if tnk == 1750:
-        return makeMedianChar(8043, data)  # eilton
-    if tnk == 1781:
-        return makeMedianChar(8054, data)  # lotml
-    if tnk == 1785:
-        return makeMedianChar(8054, data)  # lotml
-    if tnk == 1795:
-        return makeMedianChar(8054, data)  # lotml
-    if tnk == 1857:
-        return makeMedianChar(8054, data)  # lotml2
-    if tnk == 1858:
-        return makeMedianChar(8054, data)  # lotml2
-    if tnk == 1853:
-        return makeMedianChar(8054, data)  # lotml2
-    return makeMedianChar(7573, data)
-
-
-def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: dict):
+def optimize_skills(region: int, plantzone: int, dist: float, worker: dict, data: dict):
     max_skills = 9
     w_bonuses = {0: {"skills": [], "profit": 0}}
     w_actions = ["wspd"]
@@ -226,7 +139,7 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
 
     for i in range(1, max_skills + 1):
         temp_skills = [w["key"] for w in w_skills[:i]]
-        new_profit = profit(town, plantzone, dist, worker, temp_skills, data)
+        new_profit = profit(region, plantzone, dist, worker, temp_skills, data)
         w_bonuses[i] = {"skills": temp_skills, "profit": new_profit}
 
         if all(not data["worker_skills"][sk].get("mspd", 0) for sk in temp_skills):
@@ -234,7 +147,7 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
             wm_skills = [ss for ss in w_skills if ss["mspd"] > 0]
             if wm_skills:
                 mod_skills[-1] = wm_skills[0]["key"]
-                mod_profit = profit(town, plantzone, dist, worker, mod_skills, data)
+                mod_profit = profit(region, plantzone, dist, worker, mod_skills, data)
                 if mod_profit > new_profit:
                     w_bonuses[i] = {"skills": mod_skills, "profit": mod_profit}
 
@@ -255,7 +168,7 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
             if sk in w_bonuses[max_skills - i]["skills"]:
                 continue
             temp_skills = step_base_skills + [sk]
-            new_profit = profit(town, plantzone, dist, worker, temp_skills, data)
+            new_profit = profit(region, plantzone, dist, worker, temp_skills, data)
             step_candidates.append({"sk": sk, "profit": new_profit})
 
         if step_candidates:
@@ -272,57 +185,81 @@ def optimize_skills(town: str, plantzone: int, dist: float, worker: dict, data: 
     return step_results[0]
 
 
+def makeMedianChar(charkey: int, data: dict) -> dict:
+    stat = data["worker_static"][charkey]
+    pa_wspd = stat["wspd"]
+    pa_mspdBonus = 0
+    pa_luck = stat["luck"]
+
+    for _ in range(2, 41):
+        pa_wspd += (stat["wspd_lo"] + stat["wspd_hi"]) / 2
+        pa_mspdBonus += (stat["mspd_lo"] + stat["mspd_hi"]) / 2
+        pa_luck += (stat["luck_lo"] + stat["luck_hi"]) / 2
+    pa_mspd = stat["mspd"] * (1 + pa_mspdBonus / 1e6)
+
+    return {
+        "wspd": round(pa_wspd / 1e6 * 100) / 100,
+        "mspd": round(pa_mspd) / 100,
+        "luck": round(pa_luck / 1e4 * 100) / 100,
+        "charkey": charkey,
+        "isGiant": isGiant(charkey, data),
+        "worker_type": stat["species"],
+    }
+
+
+def get_all_region_workers(data):
+    region_workers = string_keys_to_ints(ds.read_json("region_workers.json"))
+    for region, worker_types in region_workers.items():
+        for worker_type, char_key in worker_types.items():
+            region_workers[region][worker_type] = makeMedianChar(char_key, data)
+    return region_workers
+
+
 def generate_value_data(prices: dict, modifiers: dict, ref_data: dict) -> None:
     import multiprocessing as mp
 
-    data = get_data_files(ref_data)
-    data["market_value"] = prices
-    data["modifiers"] = modifiers
+    data = get_data_files(ref_data, prices, modifiers)
+    region_workers = get_all_region_workers(data)
 
     tasks = []
-    for town in data["distances_tk2pzk"].keys():
-        if town in ["1375"]:
+    for region_key, town_key in data["affiliated_town_region"].items():
+        affiliated_town = data["exploration"][town_key]
+        if not affiliated_town["is_worker_npc_town"]:
             continue
 
-        # TODO: Cache median workers at the town level then
-        # filter by worker_type intersection at the plantzone level.
-        median_workers = {
-            "giant": medianGiant(town, data),
-            "goblin": medianGoblin(town, data),
-            "human": medianHuman(town, data),
-        }
+        region_worker_types = set(affiliated_town["worker_types"])
 
-        for dist_data in data["distances_tk2pzk"][town]:
-            plantzone, dist = dist_data
-            if not data["exploration"][plantzone]["is_workerman_plantzone"]:
+        for plantzone_key, distance in data["distances_tk2pzk"][region_key]:
+            plantzone = data["exploration"][plantzone_key]
+            if not plantzone["is_workerman_plantzone"]:
                 continue
-            # Each task is a town-plantzone pair with related data
-            tasks.append((town, plantzone, dist, median_workers, data))
+
+            allowed_workers = region_worker_types.intersection(plantzone["worker_types"])
+            if workers := {t: region_workers[region_key][t] for t in allowed_workers}:
+                tasks.append((region_key, plantzone_key, distance, workers, data))
 
     with mp.Pool(mp.cpu_count()) as pool:
         results = pool.starmap(optimize_worker, tasks)
 
-    # Make the output a plantzone keyed list sorted by value in descending order for 'top_n'
+    # Reshape output to plantzone keyed dict sorted by value in descending order for 'top_n'.
     output = {}
-    for plantzone, town, result_data in results:
+    for plantzone, region, result_data in results:
         if plantzone not in output:
             output[plantzone] = {}
-        output[plantzone][town] = result_data
+        output[plantzone][region] = result_data
 
-    # Sort the plantzone keyed list by value for 'top_n'
-    for plantzone, warehouse_data in output.copy().items():
+    for plantzone, region_data in output.copy().items():
         output[plantzone] = dict(
-            sorted(warehouse_data.items(), key=lambda x: x[1]["value"], reverse=True)
+            sorted(region_data.items(), key=lambda x: x[1]["value"], reverse=True)
         )
 
     ds.write_json("node_values_per_town.json", output)
 
 
-def optimize_worker(town, plantzone, dist, median_workers, data):
+def optimize_worker(region, plantzone, dist, median_workers, data):
     optimized_workers = {
-        "giant": optimize_skills(town, plantzone, dist, median_workers["giant"], data),
-        "goblin": optimize_skills(town, plantzone, dist, median_workers["goblin"], data),
-        "human": optimize_skills(town, plantzone, dist, median_workers["human"], data),
+        worker: optimize_skills(region, plantzone, dist, worker_data, data)
+        for worker, worker_data in median_workers.items()
     }
     optimized_worker = max(optimized_workers.items(), key=lambda item: item[1]["profit"])
 
@@ -333,4 +270,4 @@ def optimize_worker(town, plantzone, dist, median_workers, data):
     }
     result_data["worker_data"]["skills"] = [int(s) for s in optimized_worker[1]["skills"].copy()]
 
-    return (plantzone, town, result_data)
+    return (plantzone, region, result_data)

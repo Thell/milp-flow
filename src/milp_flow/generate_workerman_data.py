@@ -12,14 +12,15 @@ import milp_flow.data_store as ds
 from milp_flow.generate_graph_data import GraphData
 
 
-def get_workerman_json(workers, ref_data, lodging):
+def get_workerman_json(workers, data, lodging):
     """Populate and return a standard 'dummy' instance of the workerman dict."""
     region_strings = ds.read_strings_csv("Regioninfo.csv")
     lodgingP2W = {}
-    for region in ref_data["regions"]:
-        # if region in ref_data["region_to_townname"]:
-        townname = region_strings[int(region)]
-        lodgingP2W[region] = lodging[townname]
+    for region_key, town_key in data["affiliated_town_region"].items():
+        if not data["exploration"][town_key]["is_worker_npc_town"]:
+            continue
+        townname = region_strings[region_key]
+        lodgingP2W[region_key] = lodging[townname]
     workerman_json = {
         "activateAncado": False,
         "lodgingP2W": lodgingP2W,
