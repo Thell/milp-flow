@@ -5,7 +5,6 @@ from pathlib import Path
 from random import randint
 
 import milp_flow.data_store as ds
-from milp_flow.initialize import initialize_data
 from milp_flow.generate_reference_data import generate_reference_data
 from milp_flow.generate_graph_data import generate_graph_data
 from milp_flow.generate_workerman_data import generate_workerman_data
@@ -353,8 +352,6 @@ def main():
     global min_lodging, max_lodging, modifiers, prices
     lodging = min_lodging
 
-    initialize_data()
-
     today = datetime.datetime.now().strftime("%y%m%d_%H%M")
     logfile = Path(ds.path()).parent.parent.parent.joinpath("zzz_out", "logs")
     workerman_file = Path(ds.path()).parent.parent.parent.joinpath("zzz_out", "workerman")
@@ -362,7 +359,7 @@ def main():
     # test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
     # bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
     # for budget in test_set + bench_set:
-    for budget in [10]:
+    for budget in [50]:
         config = {
             "name": "Empire",
             "budget": budget,
