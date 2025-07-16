@@ -44,7 +44,8 @@ def make_workerman_worker(town_id: int, origin_id: int, worker_data: dict, stash
         "mspdSheet": worker_data["mspd"],
         "luckSheet": worker_data["luck"],
         "skills": [int(s) for s in worker_data["skills"]],
-        "job": {"kind": "plantzone", "pzk": int(origin_id), "storage": stash_id},
+        # "job": {"kind": "plantzone", "pzk": int(origin_id), "storage": stash_id},
+        "job": {"kind": "plantzone", "pzk": int(origin_id), "storage": town_id},
     }
     return worker
 
@@ -158,7 +159,7 @@ def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph
             "warehouse": v,
             "node": origin.id,
             "worker": worker,
-            "value": locale.currency(round(value), grouping=True, symbol=True)[:-3],
+            "value": round(value),
             "value_rank": root_rank,
         }
         outputs.append(output)
@@ -186,6 +187,8 @@ def generate_workerman_data(
     locale.setlocale(locale.LC_ALL, "")
 
     graph = generate_graph(graph_data, prob)
+    components = [c for c in nx.weakly_connected_components(graph)]
+
     lodging_vars, origin_vars, waypoint_vars = extract_solution(prob)
     solution = process_solution(origin_vars, data, graph_data, graph)
     calculated_value, distances, origin_cost, outputs, workerman_user_workers = solution
@@ -206,5 +209,27 @@ def generate_workerman_data(
     print_summary(outputs, counts, costs, calculated_value)
     if "town_1343" in waypoint_vars.keys():
         print("Ancado Inner Harbor active (cost 1) and included with waypoints.")
+
+    solution_nodes = set()
+    components = [list(c) for c in components]
+    lodging_nodes = [x.split("_")[1] for x in lodging_vars.keys()]
+    for i, component in enumerate(components):
+        updated_component = [node for node in component if node not in lodging_nodes]
+        components[i] = updated_component
+        solution_nodes.update([int(v) for v in updated_component])
+    print(f"\nComponents: {[len(c) for c in sorted(components, key=len, reverse=True)]}")
+    for i, c in enumerate(components):
+        print(f"Component {i}: {c}")
+    print("===========================================================")
+
+    # This is for outputting the actual solution exploration nodes
+    # for usage in validating the node-router models.
+    # Warehouse ids are not valid exploration nodes!
+    solution_nodes = sorted(list(solution_nodes))
+    print("solution_nodes", solution_nodes)
+    solution_objective_value = sum(data["exploration"][v]["need_exploration_point"] for v in solution_nodes)
+
+    workerman_json["solution_nodes"] = solution_nodes
+    workerman_json["solution_cost"] = solution_objective_value
 
     return workerman_json

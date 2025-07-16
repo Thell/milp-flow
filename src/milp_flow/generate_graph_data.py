@@ -262,9 +262,9 @@ def get_node(nodes, node_id: str, node_type: NodeType, data: Dict[str, Any], **k
             lb = kwargs.get("lb")
             root = kwargs.get("root")
             cost = kwargs.get("cost")
-            assert (
-                ub and (lb is not None) and (cost is not None) and root
-            ), "Lodging nodes require 'ub', 'lb' 'cost' and 'root' kwargs."
+            assert ub and (lb is not None) and (cost is not None) and root, (
+                "Lodging nodes require 'ub', 'lb' 'cost' and 'root' kwargs."
+            )
             regions = [root]
         case NodeType.𝓣:
             ub = data["max_ub"]
