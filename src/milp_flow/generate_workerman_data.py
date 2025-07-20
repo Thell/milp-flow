@@ -3,13 +3,13 @@
 from collections import Counter
 import locale
 
+from highspy import Highs
 import natsort
 import networkx as nx
-from pulp import LpProblem
 from tabulate import tabulate
 
-import milp_flow.data_store as ds
-from milp_flow.generate_graph_data import GraphData
+import data_store as ds
+from generate_graph_data import GraphData
 
 
 def get_workerman_json(workers, data, lodging):
@@ -82,13 +82,21 @@ def order_workerman_workers(graph, user_workers: list[dict], solution_distances)
     return ordered_workers
 
 
-def generate_graph(graph_data: GraphData, prob):
+def generate_graph(graph_data: GraphData, model: Highs):
     graph = nx.DiGraph()
     exclude_keywords = ["lodging", "𝓢", "𝓣"]
-
-    for var_key, var in prob.variablesDict().items():
-        if not round(var.varValue) >= 1:
+    x_vars_cost = 0
+    for var_obj in model.getVariables():
+        var_value = int(model.variableValue(var_obj))
+        if not round(var_value) >= 1:
             continue
+
+        var_key = var_obj.name
+        if var_key.startswith("x_plant") or var_key.startswith("x_waypoint"):
+            x_vars_cost += graph_data["V"][var_key.replace("x_", "")].cost
+            print(f"{var_key}, {var_value}")
+            continue
+
         exclude = any(keyword in var_key for keyword in exclude_keywords)
         if exclude:
             continue
@@ -106,22 +114,26 @@ def generate_graph(graph_data: GraphData, prob):
         weight = graph_data["V"][source].cost
         graph.add_edge(destination.split("_")[1], source.split("_")[1], weight=weight)
 
+    print(f"Graph cost: {x_vars_cost}")
     return graph
 
 
-def extract_solution(prob) -> tuple[dict, dict, dict]:
+def extract_solution(model: Highs) -> tuple[dict, dict, dict]:
     lodging_vars = {}
     origin_vars = {}
     waypoint_vars = {}
-    for k, v in prob.variablesDict().items():
-        if not round(v.varValue) >= 1:
+    for var_obj in model.getVariables():
+        var_value = model.variableValue(var_obj)
+        if not round(var_value) >= 1:
             continue
-        if k.startswith("flow_lodging_") and "_to_" not in k:
-            lodging_vars[k.replace("flow_", "")] = v
-        elif "_on_plant_" in k:
-            origin_vars[k.split("_")[4]] = k.split("_")[1]
-        elif k.startswith("x_waypoint") or k == "x_town_1343":
-            waypoint_vars[k.replace("x_", "")] = v
+
+        var_key = var_obj.name
+        if var_key.startswith("flow_lodging_") and "_to_" not in var_key:
+            lodging_vars[var_key.replace("flow_", "")] = var_value
+        elif "_on_plant_" in var_key:
+            origin_vars[var_key.split("_")[4]] = var_key.split("_")[1]
+        elif var_key.startswith("x_waypoint") or var_key == "x_town_1343":
+            waypoint_vars[var_key.replace("x_", "")] = var_value
     return lodging_vars, origin_vars, waypoint_vars
 
 
@@ -181,15 +193,15 @@ def print_summary(outputs, counts: dict, costs: dict, total_value: float):
 
 
 def generate_workerman_data(
-    prob: LpProblem, lodging: dict, data: dict, graph_data: GraphData
+    model: Highs, lodging: dict, data: dict, graph_data: GraphData
 ) -> dict:
     print("Creating workerman json...")
     locale.setlocale(locale.LC_ALL, "")
 
-    graph = generate_graph(graph_data, prob)
+    graph = generate_graph(graph_data, model)
     components = [c for c in nx.weakly_connected_components(graph)]
 
-    lodging_vars, origin_vars, waypoint_vars = extract_solution(prob)
+    lodging_vars, origin_vars, waypoint_vars = extract_solution(model)
     solution = process_solution(origin_vars, data, graph_data, graph)
     calculated_value, distances, origin_cost, outputs, workerman_user_workers = solution
     workerman_ordered_workers = order_workerman_workers(graph, workerman_user_workers, distances)
@@ -228,6 +240,7 @@ def generate_workerman_data(
     solution_nodes = sorted(list(solution_nodes))
     print("solution_nodes", solution_nodes)
     solution_objective_value = sum(data["exploration"][v]["need_exploration_point"] for v in solution_nodes)
+    print(f"Solution Objective Value: {solution_objective_value}")
 
     workerman_json["solution_nodes"] = solution_nodes
     workerman_json["solution_cost"] = solution_objective_value

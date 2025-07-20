@@ -4,11 +4,11 @@ from math import inf
 from pathlib import Path
 from random import randint
 
-import milp_flow.data_store as ds
-from milp_flow.generate_reference_data import generate_reference_data
-from milp_flow.generate_graph_data import generate_graph_data
-from milp_flow.generate_workerman_data import generate_workerman_data
-from milp_flow.optimize import optimize
+import data_store as ds
+from generate_reference_data import generate_reference_data
+from generate_graph_data import generate_graph_data
+from generate_workerman_data import generate_workerman_data
+from optimize import optimize
 
 
 min_lodging = {
@@ -29,7 +29,7 @@ min_lodging = {
     "Ancado Inner Harbor": 0,
     "Arehaza": 0,
     "Old Wisdom Tree": 0,
-    "Gr\u00e1na": 0,
+    "Grána": 0,
     "Duvencrune": 0,
     "O'draxxia": 0,
     "Eilton": 0,
@@ -43,36 +43,69 @@ min_lodging = {
     "Bukpo": 0,
 }
 max_lodging = {
-    "Velia": 6,
-    "Heidel": 6,
-    "Glish": 5,
-    "Calpheon City": 6,
-    "Olvia": 5,
-    "Keplan": 5,
+    "Velia": 7,
+    "Heidel": 7,
+    "Glish": 6,
+    "Calpheon City": 7,
+    "Olvia": 6,
+    "Keplan": 6,
     "Port Epheria": 5,
-    "Trent": 5,
+    "Trent": 6,
     "Iliya Island": 0,
-    "Altinova": 7,
-    "Tarif": 5,
-    "Valencia City": 6,
-    "Shakatu": 5,
+    "Altinova": 8,
+    "Tarif": 6,
+    "Valencia City": 7,
+    "Shakatu": 6,
     "Sand Grain Bazaar": 5,
     "Ancado Inner Harbor": 0,
     "Arehaza": 5,
-    "Old Wisdom Tree": 5,
-    "Gr\u00e1na": 6,
-    "Duvencrune": 5,
-    "O'draxxia": 7,
-    "Eilton": 5,
-    "Dalbeol Village": 5,
-    "Nampo's Moodle Village": 5,
-    "Nopsae's Byeot County": 5,
+    "Old Wisdom Tree": 6,
+    "Grána": 7,
+    "Duvencrune": 7,
+    "O'draxxia": 9,
+    "Eilton": 6,
+    "Dalbeol Village": 6,
+    "Nampo's Moodle Village": 6,
+    "Nopsae's Byeot County": 6,
     "Asparkan": 5,
     "Muzgar": 5,
     "Yukjo Street": 5,
-    "Godu Village": 5,
-    "Bukpo": 5,
+    "Godu Village": 6,
+    "Bukpo": 6,
 }
+lodging_specifications = {
+    "Velia": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
+    "Heidel": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
+    "Glish": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Calpheon City": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
+    "Olvia": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Keplan": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Port Epheria": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
+    "Trent": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Iliya Island": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 0},
+    "Altinova": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 8},
+    "Tarif": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Valencia City": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
+    "Shakatu": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Sand Grain Bazaar": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
+    "Ancado Inner Harbor": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 0},
+    "Arehaza": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
+    "Old Wisdom Tree": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Grána": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
+    "Duvencrune": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
+    "O'draxxia": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 9},
+    "Eilton": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Dalbeol Village": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Nampo's Moodle Village": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Nopsae's Byeot County": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Asparkan": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
+    "Muzgar": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
+    "Yukjo Street": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
+    "Godu Village": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Bukpo": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+}
+
+
 modifiers = {}
 prices = {
         "1024": 298000,
@@ -338,10 +371,7 @@ prices = {
         "820136": 357,
         "820138": 1350
     }
-grindTakenList = [
-    724,  # Hexe Sanctuary
-    1704,  # Stars End
-]
+grindTakenList = []
 
 
 def main():
@@ -352,7 +382,7 @@ def main():
     import json
 
     global min_lodging, max_lodging, modifiers, prices
-    lodging = min_lodging
+    lodging = max_lodging
 
     today = datetime.datetime.now().strftime("%y%m%d_%H%M")
     logfile = Path(ds.path()).parent.parent.parent.joinpath("zzz_out_new", "logs")
@@ -361,22 +391,23 @@ def main():
     # test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
     # bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
     # for budget in test_set + bench_set:
-    # for budget in range(5,555,5):
-    for budget in [425]:
-        config = {
+    # for budget in range(5, 555, 5):
+    for budget in [65]:
+        config: dict = {
             "name": "Empire",
             "budget": budget,
-            "top_n": 4,
-            "nearest_n": 6,
-            "waypoint_ub": 20,
+            "top_n": 6,
+            "nearest_n": 7,
+            "waypoint_ub": 16
         }
         solver_config = {
-            "num_processes": 7,
+            "num_processes": 8,
             "mip_rel_gap": 1e-4,
             "mip_feasibility_tolerance": 1e-4,
             "primal_feasibility_tolerance": 1e-4,
             "time_limit": inf,
-            "random_seed": randint(0, 2147483647),
+            "random_seed": randint(0, 2**31-1),
+            "log_to_console": False if budget < 20 else True,
             # "log_file": logfile.joinpath(f"{budget}_{today}.log"),
             "log_file": "",
         }
@@ -384,8 +415,8 @@ def main():
 
         data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
         graph_data = generate_graph_data(data)
-        prob = optimize(data, graph_data)
-        workerman_json = generate_workerman_data(prob, lodging, data, graph_data)
+        model = optimize(data, graph_data)
+        workerman_json = generate_workerman_data(model, lodging, data, graph_data)
         filename = workerman_file.joinpath(f"{budget}_{today}.json")
         with filename.open("w", encoding="utf-8") as data_file:
             json.dump(workerman_json, data_file, indent=4)

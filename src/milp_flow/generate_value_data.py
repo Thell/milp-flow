@@ -1,7 +1,7 @@
 # generate_value_data.py
 
 from math import ceil
-import milp_flow.data_store as ds
+import data_store as ds
 
 
 def string_keys_to_ints(d):

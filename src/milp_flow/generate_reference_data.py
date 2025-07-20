@@ -3,8 +3,8 @@
 import hashlib
 import json
 
-import milp_flow.data_store as ds
-from milp_flow.generate_value_data import generate_value_data
+import data_store as ds
+from generate_value_data import generate_value_data
 
 
 def get_data_files(data: dict) -> None:

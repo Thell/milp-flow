@@ -1,0 +1,6 @@
+{
+    "python.analysis.extraPaths": [
+        ".\\src\\milp_flow"
+    ],
+    "debug.allowBreakpointsEverywhere": true
+}
