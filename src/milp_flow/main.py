@@ -2,13 +2,16 @@
 
 from math import inf
 from pathlib import Path
-from random import randint
+
+from loguru import logger
 
 import data_store as ds
 from generate_reference_data import generate_reference_data
 from generate_graph_data import generate_graph_data
 from generate_workerman_data import generate_workerman_data
 from optimize import optimize
+
+from api_common import set_logger
 
 
 min_lodging = {
@@ -41,6 +44,7 @@ min_lodging = {
     "Yukjo Street": 0,
     "Godu Village": 0,
     "Bukpo": 0,
+    "Hakinza Sanctuary": 0,
 }
 max_lodging = {
     "Velia": 7,
@@ -72,6 +76,7 @@ max_lodging = {
     "Yukjo Street": 5,
     "Godu Village": 6,
     "Bukpo": 6,
+    "Hakinza Sanctuary": 7,
 }
 lodging_specifications = {
     "Velia": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
@@ -103,275 +108,8 @@ lodging_specifications = {
     "Yukjo Street": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 5},
     "Godu Village": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
     "Bukpo": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 6},
+    "Hakinza Sanctuary": {"bonus": 0, "reserved": 0, "prepaid": 0, "bonus_ub": 7},
 }
-
-
-modifiers = {}
-prices = {
-        "1024": 298000,
-        "1025": 4904.999999999999,
-        "1026": 124000,
-        "1027": 559400,
-        "4001": 895,
-        "4002": 458,
-        "4003": 695,
-        "4004": 2830,
-        "4005": 4210,
-        "4007": 1810,
-        "4008": 6650,
-        "4009": 6650,
-        "4010": 1050,
-        "4011": 7450,
-        "4013": 7450,
-        "4015": 565,
-        "4057": 5350,
-        "4202": 6350,
-        "4203": 41900,
-        "4204": 7900,
-        "4206": 65500,
-        "4207": 4910,
-        "4401": 4010,
-        "4402": 4810,
-        "4403": 4320,
-        "4404": 4320,
-        "4405": 4070,
-        "4406": 28000,
-        "4407": 5450,
-        "4408": 18200,
-        "4409": 23000,
-        "4410": 5100,
-        "4411": 28000,
-        "4412": 2520,
-        "4413": 15300,
-        "4414": 11500,
-        "4476": 605000,
-        "4477": 530000,
-        "4601": 605,
-        "4602": 3300,
-        "4603": 1210,
-        "4604": 2000,
-        "4606": 4190,
-        "4607": 4060,
-        "4608": 2560,
-        "4609": 4190,
-        "4610": 1540,
-        "4611": 1080,
-        "4612": 362,
-        "4614": 850,
-        "4615": 875,
-        "4616": 865,
-        "4619": 940,
-        "4621": 5600,
-        "4657": 4850,
-        "4660": 4750,
-        "4663": 10200,
-        "4670": 2160,
-        "4673": 1870,
-        "4683": 1000,
-        "4694": 2360,
-        "4697": 2410,
-        "4701": 3530,
-        "4801": 6850,
-        "4802": 4070,
-        "4803": 4370,
-        "4804": 4910,
-        "4805": 7750,
-        "5001": 19600,
-        "5002": 19600,
-        "5003": 19600,
-        "5004": 19600,
-        "5005": 8700,
-        "5006": 4330,
-        "5007": 21000,
-        "5008": 1970,
-        "5009": 3400,
-        "5010": 19600,
-        "5011": 1770,
-        "5012": 28000,
-        "5013": 28000,
-        "5014": 26200,
-        "5015": 1200,
-        "5016": 4250,
-        "5017": 985,
-        "5018": 1630,
-        "5020": 28000,
-        "5023": 6850,
-        "5024": 35100,
-        "5205": 298000,
-        "5401": 361,
-        "5402": 444,
-        "5404": 251,
-        "5405": 214,
-        "5407": 700,
-        "5408": 775,
-        "5409": 720,
-        "5410": 590,
-        "5411": 715,
-        "5412": 580,
-        "5413": 700,
-        "5414": 775,
-        "5421": 830,
-        "5422": 715,
-        "5425": 610,
-        "5426": 1510,
-        "5427": 2090,
-        "5428": 2330,
-        "5429": 1180,
-        "5430": 2330,
-        "5431": 2200,
-        "5432": 1990,
-        "5433": 3990,
-        "5451": 3870,
-        "5471": 37300,
-        "5516": 4460,
-        "5517": 28000,
-        "5518": 459,
-        "5519": 510,
-        "5520": 489,
-        "5521": 470,
-        "5522": 2210,
-        "5532": 3880,
-        "5544": 3770,
-        "5546": 3770,
-        "5548": 3770,
-        "5550": 3530,
-        "5801": 5300,
-        "5802": 930,
-        "5803": 6300,
-        "5804": 2700,
-        "5851": 11900,
-        "5852": 3910,
-        "5853": 20000,
-        "5854": 5750,
-        "5960": 124000,
-        "6501": 44700,
-        "6504": 595000,
-        "6505": 575000,
-        "6506": 492000,
-        "6656": 5300,
-        "6657": 2330,
-        "7001": 2090,
-        "7002": 1260,
-        "7003": 1220,
-        "7004": 890,
-        "7005": 1220,
-        "7009": 1650,
-        "7014": 11100,
-        "7016": 1190,
-        "7017": 378,
-        "7018": 935,
-        "7019": 600,
-        "7020": 3370,
-        "7021": 1760,
-        "7022": 247,
-        "7026": 820,
-        "7304": 545,
-        "7306": 945,
-        "7307": 990,
-        "7309": 805,
-        "7312": 660,
-        "7321": 8600,
-        "7347": 625,
-        "7348": 690,
-        "7360": 3170,
-        "7702": 1020,
-        "7921": 4370,
-        "8012": 0,
-        "8013": 0,
-        "8014": 0,
-        "8015": 0,
-        "8022": 1000,
-        "8027": 0,
-        "8028": 0,
-        "8029": 0,
-        "8030": 0,
-        "8502": 60000,
-        "8507": 74000,
-        "8508": 18700,
-        "8509": 2540,
-        "8510": 5800,
-        "8512": 18200,
-        "8525": 36600,
-        "8526": 20400,
-        "8527": 19100,
-        "8529": 6050,
-        "8530": 7050,
-        "8531": 6750,
-        "8534": 3160,
-        "8535": 2780,
-        "8536": 3160,
-        "8556": 18700,
-        "8560": 3270,
-        "8561": 40800,
-        "8564": 2690,
-        "8566": 2540,
-        "8567": 3440,
-        "8568": 3050,
-        "8570": 19600,
-        "8571": 38600,
-        "8572": 17900,
-        "8573": 6100,
-        "8574": 2300,
-        "8577": 18500,
-        "8578": 5650,
-        "8579": 3270,
-        "8581": 20000,
-        "8584": 18200,
-        "8585": 6900,
-        "8598": 18300,
-        "8602": 4700,
-        "8603": 6850,
-        "8604": 20000,
-        "8662": 15200,
-        "8663": 14800,
-        "8665": 19200,
-        "8933": 20000,
-        "9064": 14800,
-        "9069": 86500,
-        "9071": 17300,
-        "42418": 3000000,
-        "44035": 16,
-        "44065": 125,
-        "44118": 100,
-        "44119": 19,
-        "44121": 25,
-        "44141": 65,
-        "44179": 840,
-        "44230": 1440,
-        "44250": 150,
-        "44253": 300,
-        "44254": 150,
-        "44255": 262,
-        "44256": 300,
-        "44257": 412,
-        "44258": 150,
-        "44259": 382,
-        "44260": 900,
-        "44287": 100,
-        "44288": 100,
-        "44356": 620,
-        "44357": 760,
-        "44406": 64,
-        "65267": 1000000,
-        "752023": 51000,
-        "820035": 50000,
-        "820036": 50000,
-        "820037": 50000,
-        "820038": 50000,
-        "820039": 50000,
-        "820101": 249,
-        "820102": 301,
-        "820107": 361,
-        "820108": 630,
-        "820110": 178,
-        "820113": 486,
-        "820117": 2490,
-        "820120": 3840,
-        "820123": 2280,
-        "820136": 357,
-        "820138": 1350
-    }
-grindTakenList = []
 
 
 def main():
@@ -380,47 +118,144 @@ def main():
 
     import datetime
     import json
+    import tkinter as tk
+    from tkinter import filedialog
 
-    global min_lodging, max_lodging, modifiers, prices
-    lodging = max_lodging
+    global min_lodging, max_lodging
+
+    root = tk.Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename()
+    prices = json.loads(Path(file_path).read_text(encoding="utf-8"))["effectivePrices"]
+
+    modifiers = {}
+    grindTakenList = []
+    lodging = min_lodging
 
     today = datetime.datetime.now().strftime("%y%m%d_%H%M")
     logfile = Path(ds.path()).parent.parent.parent.joinpath("zzz_out_new", "logs")
     workerman_file = Path(ds.path()).parent.parent.parent.joinpath("zzz_out_new", "workerman")
 
-    # test_set = [5, 10, 20, 30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 501]
-    # bench_set = [375, 395, 415, 435, 455, 475, 495, 515]
-    # for budget in test_set + bench_set:
-    # for budget in range(5, 555, 5):
-    for budget in [65]:
+    # Empirical testing (prior to adding the clustering logic) shows that the best parameters are:
+    # For < 550 budget:
+    #   "do_prune" = True
+    #   "do_reduce" = True
+    #   "cr_pairs" = True
+    #   "prize_scale" = True
+    #   "root_cost" = False
+    # and for > 550 budget:
+    #   "do_prune" = True
+    #   "do_reduce" = True
+    #   "cr_pairs" = False
+    #   "prize_scale" = True
+    #   "root_cost" = True
+    arg_sets = [
+        {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": True,
+            "prize_scale:": True,
+            "root_cost": False,
+        },
+        {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": False,
+            "prize_scale:": True,
+            "root_cost": True,
+        },
+        {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": True,
+            "prize_scale:": True,
+            "root_cost": True,
+        },
+        {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": False,
+            "prize_scale:": True,
+            "root_cost": False,
+        },
+        {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": False,
+            "prize_scale:": False,
+            "root_cost": True,
+        },
+        {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": False,
+            "prize_scale:": False,
+            "root_cost": False,
+        },
+    ]
+
+    # all combos of arg_set options
+    arg_sets = []
+    for cr_pairs in [True, False]:
+        for prize_scale in [True, False]:
+            for root_cost in [True, False]:
+                arg_sets.append({
+                    "do_prune": True,
+                    "do_reduce": True,
+                    "cr_pairs": cr_pairs,
+                    "prize_scale": prize_scale,
+                    "root_cost": root_cost,
+                    "basin_type": 2,
+                })
+    # Remove leading arg_sets until True, False, False is found
+    # arg_sets = arg_sets[7:]
+    # arg_sets = [arg_sets[0]]  # test using just the first arg_set
+
+    budgets = range(625, 650, 25)
+    for budget in budgets:
+        args = {
+            "do_prune": True,
+            "do_reduce": True,
+            "cr_pairs": False,
+            "prize_scale": False,
+            "root_cost": False,
+            "basin_type": 2,
+        }
+        if budget >= 300:
+            args["root_cost"] = True
+
+        # Initial base test
+        print(f"== Budget: {budget} ==")
         config: dict = {
             "name": "Empire",
             "budget": budget,
             "top_n": 6,
             "nearest_n": 7,
-            "waypoint_ub": 16
+            "waypoint_ub": 17,
         }
         solver_config = {
-            "num_processes": 8,
+            "num_threads": 7,
             "mip_rel_gap": 1e-4,
             "mip_feasibility_tolerance": 1e-4,
+            "mip_heuristic_run_root_reduced_cost": args["root_cost"],
             "primal_feasibility_tolerance": 1e-4,
             "time_limit": inf,
-            "random_seed": randint(0, 2**31-1),
+            "random_seed": 0,
             "log_to_console": False if budget < 20 else True,
-            # "log_file": logfile.joinpath(f"{budget}_{today}.log"),
             "log_file": "",
+            # "highs_analysis_level": 128,
         }
         config["solver"] = solver_config
 
         data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
-        graph_data = generate_graph_data(data)
-        model = optimize(data, graph_data)
-        workerman_json = generate_workerman_data(model, lodging, data, graph_data)
-        filename = workerman_file.joinpath(f"{budget}_{today}.json")
-        with filename.open("w", encoding="utf-8") as data_file:
-            json.dump(workerman_json, data_file, indent=4)
+        graph_data = generate_graph_data(data, args["do_prune"], args["do_reduce"], args["basin_type"])
+        logger.info(f"  Budget: {budget} {args=}")
+        model, terminal_sets = optimize(graph_data, args["cr_pairs"], args["prize_scale"])
+        logger.info(f"  Budget: {budget} {args=}")
 
 
 if __name__ == "__main__":
+    config = {}
+    config["logger"] = {"level": "INFO", "format": "<level>{message}</level>"}
+    set_logger(config)
     main()

@@ -6,11 +6,16 @@ import json
 import data_store as ds
 from generate_value_data import generate_value_data
 
+from api_exploration_graph import get_exploration_graph, get_clean_exploration_data
+
 
 def get_data_files(data: dict) -> None:
     print("Reading data files...")
 
-    data["exploration"] = {int(k): v for k, v in ds.read_json("exploration.json").items()}
+    config = {"exploration_data": {"directed": True, "edge_weighted": False, "omit_great_ocean": True}}
+    data["exploration"] = get_clean_exploration_data(config)
+    data["exploration_graph"] = get_exploration_graph(config)
+
     data["lodging_data"] = {int(k): v for k, v in ds.read_json("all_lodging_storage.json").items()}
     data["region_strings"] = {int(k): v for k, v in ds.read_strings_csv("Regioninfo.csv").items()}
 
@@ -29,7 +34,7 @@ def get_value_data(prices: dict, modifiers: dict, data: dict) -> None:
         generate_value_data(prices, modifiers, data)
     ds.path().joinpath(sha_filename).write_text(latest_sha)
 
-    data["plant_values"] = ds.read_json("node_values_per_town.json")
+    data["plant_values"] = {int(k): v for k, v in ds.read_json("node_values_per_town.json").items()}
 
 
 def get_lodging_data(lodging: dict, data: dict) -> None:
@@ -52,9 +57,9 @@ def generate_reference_data(
     data["force_active_node_ids"] = force_active_node_ids
     get_data_files(data)
 
-    data["max_ub"] = len(
-        [v for v in data["exploration"].values() if v["is_workerman_plantzone"]]
-    ) + len(force_active_node_ids)
+    data["max_ub"] = len([v for v in data["exploration"].values() if v["is_workerman_plantzone"]]) + len(
+        force_active_node_ids
+    )
 
     data["affiliated_town_region"] = {
         v["region_key"]: k

@@ -2,6 +2,7 @@
 
 from collections import Counter
 import locale
+from typing import Any
 
 from highspy import Highs
 import natsort
@@ -9,7 +10,7 @@ import networkx as nx
 from tabulate import tabulate
 
 import data_store as ds
-from generate_graph_data import GraphData
+# from generate_graph_data import GraphData
 
 
 def get_workerman_json(workers, data, lodging):
@@ -82,101 +83,101 @@ def order_workerman_workers(graph, user_workers: list[dict], solution_distances)
     return ordered_workers
 
 
-def generate_graph(graph_data: GraphData, model: Highs):
-    graph = nx.DiGraph()
-    exclude_keywords = ["lodging", "𝓢", "𝓣"]
-    x_vars_cost = 0
-    for var_obj in model.getVariables():
-        var_value = int(model.variableValue(var_obj))
-        if not round(var_value) >= 1:
-            continue
+# def generate_graph(graph_data: GraphData, model: Highs):
+#     graph = nx.DiGraph()
+#     exclude_keywords = ["lodging", "𝓢", "𝓣"]
+#     x_vars_cost = 0
+#     for var_obj in model.getVariables():
+#         var_value = int(model.variableValue(var_obj))
+#         if not round(var_value) >= 1:
+#             continue
 
-        var_key = var_obj.name
-        if var_key.startswith("x_plant") or var_key.startswith("x_waypoint"):
-            x_vars_cost += graph_data["V"][var_key.replace("x_", "")].cost
-            print(f"{var_key}, {var_value}")
-            continue
+#         var_key = var_obj.name
+#         if var_key.startswith("x_plant") or var_key.startswith("x_waypoint"):
+#             x_vars_cost += graph_data["V"][var_key.replace("x_", "")].cost
+#             print(f"{var_key}, {var_value}")
+#             continue
 
-        exclude = any(keyword in var_key for keyword in exclude_keywords)
-        if exclude:
-            continue
+#         exclude = any(keyword in var_key for keyword in exclude_keywords)
+#         if exclude:
+#             continue
 
-        u, v = None, None
-        if "regionflow_" in var_key and "_on_" in var_key:
-            tmp = var_key.split("_on_")
-            tmp = tmp[1].split("_to_")
-            u = tmp[0]
-            v = tmp[1]
-        else:
-            continue
+#         u, v = None, None
+#         if "regionflow_" in var_key and "_on_" in var_key:
+#             tmp = var_key.split("_on_")
+#             tmp = tmp[1].split("_to_")
+#             u = tmp[0]
+#             v = tmp[1]
+#         else:
+#             continue
 
-        source, destination = u, v
-        weight = graph_data["V"][source].cost
-        graph.add_edge(destination.split("_")[1], source.split("_")[1], weight=weight)
+#         source, destination = u, v
+#         weight = graph_data["V"][source].cost
+#         graph.add_edge(destination.split("_")[1], source.split("_")[1], weight=weight)
 
-    print(f"Graph cost: {x_vars_cost}")
-    return graph
-
-
-def extract_solution(model: Highs) -> tuple[dict, dict, dict]:
-    lodging_vars = {}
-    origin_vars = {}
-    waypoint_vars = {}
-    for var_obj in model.getVariables():
-        var_value = model.variableValue(var_obj)
-        if not round(var_value) >= 1:
-            continue
-
-        var_key = var_obj.name
-        if var_key.startswith("flow_lodging_") and "_to_" not in var_key:
-            lodging_vars[var_key.replace("flow_", "")] = var_value
-        elif "_on_plant_" in var_key:
-            origin_vars[var_key.split("_")[4]] = var_key.split("_")[1]
-        elif var_key.startswith("x_waypoint") or var_key == "x_town_1343":
-            waypoint_vars[var_key.replace("x_", "")] = var_value
-    return lodging_vars, origin_vars, waypoint_vars
+#     print(f"Graph cost: {x_vars_cost}")
+#     return graph
 
 
-def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph: nx.DiGraph):
-    all_pairs = dict(nx.all_pairs_bellman_ford_path_length(graph, weight="weight"))
-    region_to_town = {v["region_key"]: k for k, v in data["exploration"].items() if v["is_town"]}
+# def extract_solution(model: Highs) -> tuple[dict, dict, dict]:
+#     lodging_vars = {}
+#     origin_vars = {}
+#     waypoint_vars = {}
+#     for var_obj in model.getVariables():
+#         var_value = model.variableValue(var_obj)
+#         if not round(var_value) >= 1:
+#             continue
 
-    calculated_value = 0
-    distances = []
-    origin_cost = 0
-    outputs = []
-    town_ids = set()
-    workerman_user_workers = []
-    root_ranks = []
-    stash_town_id = 601
-    for k, v in origin_vars.items():
-        town_id = region_to_town[int(v)]
-        town_ids.add(town_id)
-        distances.append(all_pairs[str(town_id)][k])
+#         var_key = var_obj.name
+#         if var_key.startswith("flow_lodging_") and "_to_" not in var_key:
+#             lodging_vars[var_key.replace("flow_", "")] = var_value
+#         elif "_on_plant_" in var_key:
+#             origin_vars[var_key.split("_")[4]] = var_key.split("_")[1]
+#         elif var_key.startswith("x_waypoint") or var_key == "x_town_1343":
+#             waypoint_vars[var_key.replace("x_", "")] = var_value
+#     return lodging_vars, origin_vars, waypoint_vars
 
-        origin = graph_data["V"][f"plant_{k}"]
-        worker_data = origin.region_prizes[v]["worker_data"]
-        user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, stash_town_id)
-        workerman_user_workers.append(user_worker)
 
-        value = origin.region_prizes[v]["value"]
-        worker = origin.region_prizes[v]["worker"]
-        root_rank = list(origin.region_prizes.keys()).index(v) + 1
-        root_ranks.append(root_rank)
+# def process_solution(origin_vars: dict, data: dict, graph_data: GraphData, graph: nx.DiGraph):
+#     all_pairs = dict(nx.all_pairs_bellman_ford_path_length(graph, weight="weight"))
+#     region_to_town = {v["region_key"]: k for k, v in data["exploration"].items() if v["is_town"]}
 
-        origin_cost += origin.cost
-        calculated_value += value
+#     calculated_value = 0
+#     distances = []
+#     origin_cost = 0
+#     outputs = []
+#     town_ids = set()
+#     workerman_user_workers = []
+#     root_ranks = []
+#     stash_town_id = 601
+#     for k, v in origin_vars.items():
+#         town_id = region_to_town[int(v)]
+#         town_ids.add(town_id)
+#         distances.append(all_pairs[str(town_id)][k])
 
-        output = {
-            "warehouse": v,
-            "node": origin.id,
-            "worker": worker,
-            "value": round(value),
-            "value_rank": root_rank,
-        }
-        outputs.append(output)
+#         origin = graph_data["V"][f"plant_{k}"]
+#         worker_data = origin.region_prizes[v]["worker_data"]
+#         user_worker = make_workerman_worker(int(town_id), int(origin.id), worker_data, stash_town_id)
+#         workerman_user_workers.append(user_worker)
 
-    return calculated_value, distances, origin_cost, outputs, workerman_user_workers
+#         value = origin.region_prizes[v]["value"]
+#         worker = origin.region_prizes[v]["worker"]
+#         root_rank = list(origin.region_prizes.keys()).index(v) + 1
+#         root_ranks.append(root_rank)
+
+#         origin_cost += origin.cost
+#         calculated_value += value
+
+#         output = {
+#             "warehouse": v,
+#             "node": origin.id,
+#             "worker": worker,
+#             "value": round(value),
+#             "value_rank": root_rank,
+#         }
+#         outputs.append(output)
+
+#     return calculated_value, distances, origin_cost, outputs, workerman_user_workers
 
 
 def print_summary(outputs, counts: dict, costs: dict, total_value: float):
@@ -192,57 +193,56 @@ def print_summary(outputs, counts: dict, costs: dict, total_value: float):
     print("         Value:", locale.currency(round(total_value), grouping=True, symbol=True)[:-3])
 
 
-def generate_workerman_data(
-    model: Highs, lodging: dict, data: dict, graph_data: GraphData
-) -> dict:
+def generate_workerman_data(model: Highs, lodging: dict, data: dict, graph_data: Any) -> dict:
     print("Creating workerman json...")
     locale.setlocale(locale.LC_ALL, "")
 
-    graph = generate_graph(graph_data, model)
-    components = [c for c in nx.weakly_connected_components(graph)]
+    # graph = generate_graph(graph_data, model)
+    # components = [c for c in nx.weakly_connected_components(graph)]
 
-    lodging_vars, origin_vars, waypoint_vars = extract_solution(model)
-    solution = process_solution(origin_vars, data, graph_data, graph)
-    calculated_value, distances, origin_cost, outputs, workerman_user_workers = solution
-    workerman_ordered_workers = order_workerman_workers(graph, workerman_user_workers, distances)
-    workerman_json = get_workerman_json(workerman_ordered_workers, data, lodging)
+    # lodging_vars, origin_vars, waypoint_vars = extract_solution(model)
+    # solution = process_solution(origin_vars, data, graph_data, graph)
+    # calculated_value, distances, origin_cost, outputs, workerman_user_workers = solution
+    # workerman_ordered_workers = order_workerman_workers(graph, workerman_user_workers, distances)
+    # workerman_json = get_workerman_json(workerman_ordered_workers, data, lodging)
 
-    counts: dict = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
-    counts["by_regions"] = {
-        str(data["region_strings"][int(k)]): v
-        for k, v in Counter(origin_vars.values()).most_common()
-    }
-    costs = {
-        "lodgings": sum(graph_data["V"][k].cost for k in lodging_vars.keys()),
-        "origins": origin_cost,
-        "waypoints": sum(graph_data["V"][k].cost for k in waypoint_vars.keys()),
-    }
+    # counts: dict = {"origins": len(origin_vars), "waypoints": len(waypoint_vars)}
+    # counts["by_regions"] = {
+    #     str(data["region_strings"][int(k)]): v
+    #     for k, v in Counter(origin_vars.values()).most_common()
+    # }
+    # costs = {
+    #     "lodgings": sum(graph_data["V"][k].cost for k in lodging_vars.keys()),
+    #     "origins": origin_cost,
+    #     "waypoints": sum(graph_data["V"][k].cost for k in waypoint_vars.keys()),
+    # }
 
-    print_summary(outputs, counts, costs, calculated_value)
-    if "town_1343" in waypoint_vars.keys():
-        print("Ancado Inner Harbor active (cost 1) and included with waypoints.")
+    # print_summary(outputs, counts, costs, calculated_value)
+    # if "town_1343" in waypoint_vars.keys():
+    #     print("Ancado Inner Harbor active (cost 1) and included with waypoints.")
 
-    solution_nodes = set()
-    components = [list(c) for c in components]
-    lodging_nodes = [x.split("_")[1] for x in lodging_vars.keys()]
-    for i, component in enumerate(components):
-        updated_component = [node for node in component if node not in lodging_nodes]
-        components[i] = updated_component
-        solution_nodes.update([int(v) for v in updated_component])
-    print(f"\nComponents: {[len(c) for c in sorted(components, key=len, reverse=True)]}")
-    for i, c in enumerate(components):
-        print(f"Component {i}: {c}")
-    print("===========================================================")
+    # solution_nodes = set()
+    # components = [list(c) for c in components]
+    # lodging_nodes = [x.split("_")[1] for x in lodging_vars.keys()]
+    # for i, component in enumerate(components):
+    #     updated_component = [node for node in component if node not in lodging_nodes]
+    #     components[i] = updated_component
+    #     solution_nodes.update([int(v) for v in updated_component])
+    # print(f"\nComponents: {[len(c) for c in sorted(components, key=len, reverse=True)]}")
+    # for i, c in enumerate(components):
+    #     print(f"Component {i}: {c}")
+    # print("===========================================================")
 
-    # This is for outputting the actual solution exploration nodes
-    # for usage in validating the node-router models.
-    # Warehouse ids are not valid exploration nodes!
-    solution_nodes = sorted(list(solution_nodes))
-    print("solution_nodes", solution_nodes)
-    solution_objective_value = sum(data["exploration"][v]["need_exploration_point"] for v in solution_nodes)
-    print(f"Solution Objective Value: {solution_objective_value}")
+    # # This is for outputting the actual solution exploration nodes
+    # # for usage in validating the node-router models.
+    # # Warehouse ids are not valid exploration nodes!
+    # solution_nodes = sorted(list(solution_nodes))
+    # print("solution_nodes", solution_nodes)
+    # solution_objective_value = sum(data["exploration"][v]["need_exploration_point"] for v in solution_nodes)
+    # print(f"Solution Objective Value: {solution_objective_value}")
 
-    workerman_json["solution_nodes"] = solution_nodes
-    workerman_json["solution_cost"] = solution_objective_value
+    # workerman_json["solution_nodes"] = solution_nodes
+    # workerman_json["solution_cost"] = solution_objective_value
 
-    return workerman_json
+    # return workerman_json
+    return {}
