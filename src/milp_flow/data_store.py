@@ -6,9 +6,15 @@ from pathlib import Path
 from urllib import request
 
 
+# def path() -> Path:
+#     with importlib.resources.as_file(importlib.resources.files().joinpath("data")) as path:
+#         return path
 def path() -> Path:
-    with importlib.resources.as_file(importlib.resources.files().joinpath("data")) as path:
-        return path
+    try:
+        with importlib.resources.as_file(importlib.resources.files(__package__).joinpath("data")) as path:
+            return path
+    except (ValueError, AttributeError):
+        return Path(__file__).parent / "data"  # Fallback to sibling dir
 
 
 def is_file(filename: str) -> bool:

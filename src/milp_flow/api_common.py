@@ -5,9 +5,12 @@ import sys
 
 from loguru import logger
 import rustworkx as rx
+from rustworkx import PyDiGraph
 
 import data_store as ds
 
+ANCADO_INNER_HARBOR_KEY = 1343
+CALPHEON_KEY = 601
 GREAT_OCEAN_TERRITORY = 5
 OQUILLAS_EYE_KEY = 1727
 SUPER_ROOT = 99999
@@ -60,3 +63,22 @@ def get_clean_exploration_data(config: dict):
         data = new_data
 
     return data
+
+
+def extract_base_empire(G: PyDiGraph, base_empire: dict):
+    node_key_by_index = G.attrs["node_key_by_index"]
+    prev_terminals_sets = {}
+
+    user_workers = base_empire["userWorkers"]
+    for worker in user_workers:
+        tnk_value = worker.get("tnk")  # town id (root waypoint_key)
+        job_data = worker.get("job", {})
+        if job_data is None:
+            logger.error(f"Worker for tnk {tnk_value} has no job in base empire data")
+            continue
+        pzk_value = job_data.get("pzk")  # plantzone id (terminal waypoint_key)
+        t = node_key_by_index.inv[pzk_value]
+        r = node_key_by_index.inv[tnk_value]
+        prev_terminals_sets[t] = r
+
+    return prev_terminals_sets

@@ -1,10 +1,15 @@
 # generate_value_data.py
 
 from math import ceil
-from typing import Any
-from collections.abc import Mapping
+from typing import TypedDict
 
 import data_store as ds
+
+
+class SkillsValue(TypedDict):
+    skills: list[int]
+    profit: float
+    cycles: float
 
 
 def string_keys_to_ints(d):
@@ -79,7 +84,7 @@ def price_lerp(lucky_price: float, unlucky_price: float, luck: float) -> float:
 
 def profitPzTownStats(
     pzk: int, _tnk, dist: float, wspd: float, mspd: float, luck: float, is_giant: bool, data: dict
-) -> float:
+) -> tuple[float, float]:
     drop = data["plantzone_drops"][pzk]
     luckyPart = price_bunch(drop["lucky"], data)
     unluckyValue = price_bunch(drop["unlucky"], data)
@@ -99,12 +104,14 @@ def profitPzTownStats(
     )
     cyclesDaily = calcCyclesDaily(drop["workload"], wspd, dist, mspd, modifier)
     priceDaily = cyclesDaily * cycleValue
-    return priceDaily
+    return priceDaily, cyclesDaily
 
 
-def profit(region: int, plantzone: int, dist: float, worker: dict, skill_set: list, data: dict) -> float:
+def profit(
+    region: int, plantzone: int, dist: float, worker: dict, skill_set: list, data: dict
+) -> tuple[float, float]:
     stats = worker_stats(worker, skill_set, data)
-    priceDaily = profitPzTownStats(
+    priceDaily, cyclesDaily = profitPzTownStats(
         plantzone,
         region,
         dist,
@@ -114,12 +121,12 @@ def profit(region: int, plantzone: int, dist: float, worker: dict, skill_set: li
         isGiant(worker["charkey"], data),
         data,
     )
-    return priceDaily
+    return priceDaily, cyclesDaily
 
 
 def optimize_skills(region: int, plantzone: int, dist: float, worker: dict, data: dict):
     max_skills = 9
-    w_bonuses: Mapping[int, Mapping[str, Any]] = {0: {"skills": [], "profit": 0}}
+    w_bonuses: dict[int, SkillsValue] = {0: {"skills": [], "profit": 0, "cycles": 0}}
     w_actions = ["wspd"]
     w_actions.append("wspd_farm")
 
@@ -136,17 +143,17 @@ def optimize_skills(region: int, plantzone: int, dist: float, worker: dict, data
 
     for i in range(1, max_skills + 1):
         temp_skills = [w["key"] for w in w_skills[:i]]
-        new_profit = profit(region, plantzone, dist, worker, temp_skills, data)
-        w_bonuses[i] = {"skills": temp_skills, "profit": new_profit}
+        new_profit, new_cycles = profit(region, plantzone, dist, worker, temp_skills, data)
+        w_bonuses[i] = {"skills": temp_skills, "profit": new_profit, "cycles": new_cycles}
 
         if all(not data["worker_skills"][sk].get("mspd", 0) for sk in temp_skills):
             mod_skills = temp_skills.copy()
             wm_skills = [ss for ss in w_skills if ss["mspd"] > 0]
             if wm_skills:
                 mod_skills[-1] = wm_skills[0]["key"]
-                mod_profit = profit(region, plantzone, dist, worker, mod_skills, data)
+                mod_profit, mod_cycles = profit(region, plantzone, dist, worker, mod_skills, data)
                 if mod_profit > new_profit:
-                    w_bonuses[i] = {"skills": mod_skills, "profit": mod_profit}
+                    w_bonuses[i] = {"skills": mod_skills, "profit": mod_profit, "cycles": mod_cycles}
 
     ml_actions = ["mspd", "luck"]
     ml_skills = {
@@ -154,23 +161,28 @@ def optimize_skills(region: int, plantzone: int, dist: float, worker: dict, data
     }
 
     step_results = [w_bonuses[max_skills]]
-    ml_best_skills = []
+    ml_best_skills: list[int] = []
     for i in range(1, max_skills + 1):
-        step_base_skills = w_bonuses[max_skills - i]["skills"] + ml_best_skills
+        base_skills: list[int] = w_bonuses[max_skills - i]["skills"]
+        step_base_skills = base_skills + ml_best_skills
         step_candidates = []
 
         for sk in ml_skills:
-            if sk in w_bonuses[max_skills - i]["skills"]:
+            if sk in base_skills:
                 continue
             temp_skills = step_base_skills + [sk]
-            new_profit = profit(region, plantzone, dist, worker, temp_skills, data)
-            step_candidates.append({"sk": sk, "profit": new_profit})
+            new_profit, new_cycles = profit(region, plantzone, dist, worker, temp_skills, data)
+            step_candidates.append({"sk": sk, "profit": new_profit, "cycles": new_cycles})
 
         if step_candidates:
             step_candidates.sort(key=lambda x: x["profit"], reverse=True)
             step_best_skill = step_candidates[0]["sk"]
             step_skills = step_base_skills + [step_best_skill]
-            step_results.append({"skills": step_skills, "profit": step_candidates[0]["profit"]})
+            step_results.append({
+                "skills": step_skills,
+                "profit": step_candidates[0]["profit"],
+                "cycles": step_candidates[0]["cycles"],
+            })
             ml_best_skills.append(step_best_skill)
             ml_skills.remove(step_best_skill)
         else:
@@ -259,6 +271,7 @@ def optimize_worker(region, plantzone, dist, median_workers, data):
     result_data = {
         "worker": optimized_worker[0],
         "value": optimized_worker[1]["profit"],
+        "cycles": optimized_worker[1]["cycles"],
         "worker_data": median_workers[optimized_worker[0]].copy(),
     }
     result_data["worker_data"]["skills"] = [int(s) for s in optimized_worker[1]["skills"].copy()]  # type: ignore

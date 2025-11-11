@@ -346,7 +346,7 @@ def add_terminal_sets_markers(
     # For each root node get all terminals where the root node is rank 1 in the prizes
     terminal_sets = {}
     root_indices = G.attrs["root_indices"]
-    terminals = G.attrs["terminals"]
+    terminals = G.attrs["terminal_indices"]
     for root in root_indices:
         rank1_terminals = []
         for terminal in terminals:
@@ -455,7 +455,7 @@ def main():
     }
 
     data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
-    graph_data = generate_graph_data(data, args["do_prune"], args["do_reduce"])
+    graph_data = generate_graph_data(data, args["do_prune"], args["do_reduce"], 2)
     visualize_basin_graph(graph_data)
 
 

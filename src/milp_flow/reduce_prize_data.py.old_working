@@ -1,0 +1,257 @@
+# reference_of_working_reduce_prize_data.py
+
+from copy import deepcopy
+from typing import Any
+
+from loguru import logger
+from rustworkx import PyDiGraph
+from scipy.stats import percentileofscore  # to be used with the TODO prize filtering
+
+import terminal_prize_utils as tpu
+
+
+# tpu Helper
+def nullify_prize_entries(
+    solver_graph: PyDiGraph, data: dict[str, Any], prunable_entries: list[dict[str, int]]
+):
+    """Prune terminal-root pairs with low terminal prizes by nullifying their prizes."""
+    logger.info("    nullifying (terminal, root) pairs with low terminal prizes...")
+    town_to_region_map = {int(town): region for region, town in data["affiliated_town_region"].items()}
+    for entry in prunable_entries:
+        t_idx = entry["t_idx"]
+        r_idx = entry["r_idx"]
+        node = solver_graph[t_idx]
+        prize = node["prizes"][r_idx]
+        node["prizes"][r_idx] = 0
+
+        town = solver_graph[r_idx]["waypoint_key"]
+        region = town_to_region_map[int(town)]
+        node_weight = node["need_exploration_point"]
+        path_weight = data["all_pairs_path_lengths"].get((r_idx, t_idx), 2**31)
+        logger.debug(
+            f"removed prize: {node['waypoint_key']:>5} {region:>5} {town:>5} {prize:>5} {node_weight:>5} {path_weight:>5}"
+        )
+
+
+# tpu Helper
+def prune_null_prize_entries(solver_graph: PyDiGraph, prunable_entries: list[dict[str, int]]):
+    """Prune terminal-root pairs with zero value terminal prizes from terminal prizes.
+
+    NOTE: Only removes from graph node payload!
+    """
+    logger.info("    pruning (terminal, root) pairs with low terminal prizes...")
+
+    terminal_indices = solver_graph.attrs["terminal_indices"]
+
+    total_pairs_pre = sum(len(solver_graph[i]["prizes"]) for i in terminal_indices)
+
+    for entry in prunable_entries:
+        node = solver_graph[entry["t_idx"]]
+        node["prizes"].pop(entry["r_idx"], None)
+
+    total_pairs_post = sum(len(solver_graph[i]["prizes"]) for i in terminal_indices)
+
+    logger.info(f"      pruned prizes: {total_pairs_pre} → {total_pairs_post} pairs")
+
+
+# tpu Helper
+def prune_prize_drained_terminals(solver_graph: PyDiGraph):
+    """Prune terminal nodes with no prizes from the solver graph, and attrs["terminal_indices"]."""
+    logger.info("    pruning terminal nodes with no prizes...")
+
+    terminal_indices = solver_graph.attrs["terminal_indices"].copy()
+    removed = 0
+    for t in terminal_indices:
+        if not solver_graph[t]["is_super_terminal"] and len(solver_graph[t]["prizes"]) == 0:
+            removed += remove_solver_graph_node(solver_graph, t)
+    solver_graph.attrs["terminal_indices"] = terminal_indices
+    logger.info(f"      removed {removed} prize-drained terminals")
+
+
+# tpu Helper
+def rebuild_prize_data(solver_graph: PyDiGraph, data: dict[str, Any]):
+    """Rebuild solver_graph prize data based on graph terminal updates during node/prize pruning."""
+    logger.debug("    rebuilding prize data...")
+
+    families = tpu.get_terminal_families(solver_graph)
+    tr_data = tpu.get_terminal_root_prizes(solver_graph, data["all_pairs_path_lengths"])
+    prizes_by_terminal_view = tpu.get_prizes_by_terminal_view(solver_graph, tr_data)
+    prizes_by_root_view = tpu.get_prizes_by_root_view(solver_graph, tr_data)
+
+    solver_graph.attrs["families"] = families
+    solver_graph.attrs["terminal_root_prizes"] = tr_data
+    solver_graph.attrs["prizes_by_terminal_view"] = prizes_by_terminal_view
+    solver_graph.attrs["prizes_by_root_view"] = prizes_by_root_view
+    solver_graph.attrs["prize_ranks"] = tpu.get_full_prize_ranks(
+        solver_graph,
+        tr_data,
+        data["prizes_by_root_view"],
+        data["prizes_by_terminal_view"],
+    )
+
+
+def remove_solver_graph_node(solver_graph: PyDiGraph, i: int) -> bool:
+    """Remove a node from the solver graph and indices lists.
+
+    NOTE: related (terminal, root) prize data is not updated here!
+
+    returns:
+        bool: True if the node was a terminal or root, indicating rank data rebuild may be required
+    """
+    is_terminal = i in solver_graph.attrs["terminal_indices"]
+    is_super_terminal = i in solver_graph.attrs["super_terminal_indices"]
+    is_root = i in solver_graph.attrs["root_indices"]
+    solver_graph.remove_node(i)
+
+    if is_terminal:
+        solver_graph.attrs["terminal_indices"].remove(i)
+    if is_super_terminal:
+        solver_graph.attrs["super_terminal_indices"].remove(i)
+    if is_root:
+        solver_graph.attrs["root_indices"].remove(i)
+
+    return is_terminal or is_root
+
+
+def apply_top_n_filtering(solver_graph: PyDiGraph, data: dict[str, Any]):
+    """Limits the number of prize entries per terminal."""
+    top_n = data["config"]["top_n"]
+    logger.info(f"      applying top-n filtering for the top {top_n} remaining prizes...")
+
+    terminal_indices = solver_graph.attrs["terminal_indices"]
+
+    active_tr_pairs = 0
+    for t_idx in terminal_indices:
+        prizes = solver_graph[t_idx]["prizes"]
+        prizes = sorted(prizes.items(), key=lambda x: x[1], reverse=True)
+        solver_graph[t_idx]["prizes"] = dict(prizes[:top_n])
+        active_tr_pairs += len(solver_graph[t_idx]["prizes"])
+
+    logger.info(f"      remaining active terminal-root pairs: {active_tr_pairs}")
+
+
+def apply_post_topN_filtered_pruning(solver_graph: PyDiGraph, data: dict[str, Any]):
+    """Prune terminal prize entries after applying top_n filtering."""
+    logger.info("      applying post-topN filtering...")
+
+    # NOTE: the rank-based pruning thresholds must be based on the post-topN filtered data
+    rebuild_prize_data(solver_graph, data)
+
+    families = solver_graph.attrs["families"]
+    terminal_indices = solver_graph.attrs["terminal_indices"]
+    tr_data = solver_graph.attrs["terminal_root_prizes"]
+    root_ts = solver_graph.attrs["prizes_by_root_view"]
+    t_rs = solver_graph.attrs["prizes_by_terminal_view"]
+    top_n = data["config"]["top_n"]
+
+    logger.info(f"      post top_n: using ranks for {len(root_ts)} roots, {len(t_rs)} terminals")
+
+    # ---------------------------------------------------------------
+    # Budget-dependent dynamic pruning threshold
+    # NOTE: Prunable entries are those ranked below this threshold
+    # TODO: Account for bonus lodging capacities - capacity_pressure
+    # ---------------------------------------------------------------
+    density_center = 100.0
+    divisor = 7.0
+    expected_ts = min(data["config"]["budget"] / divisor, density_center)
+    density = max(0.0, min(1.0, expected_ts / density_center))
+    # Dynamic range: small budgets prune aggressively, large budgets gently
+    threshold = 0.20 + 0.70 * density
+    logger.info(f"    pruning with threshold {threshold:.3f} (density={density:.3f})")
+
+    # Prune bottom-ranked terminal-root pairs
+    skipped_family = 0
+    prunable_entries = []
+
+    for entry in tr_data.values():
+        t_idx = entry["t_idx"]
+        r_idx = entry["r_idx"]
+        skip_prune = False
+
+        # Family safeguard: if any sibling in this family is strong for this root, skip prune
+        parents = list(solver_graph.predecessor_indices(t_idx))
+        if parents:
+            parent = parents[0]
+            family = families.get(parent, [])
+            if t_idx in family and len(family) > 1:
+                peers_root = len(root_ts[r_idx])
+                for fam_t in family:
+                    fam_entry = next((e for e in root_ts[r_idx] if e["t_idx"] == fam_t), None)
+                    if fam_entry and fam_entry["ValueRank_Root"] <= threshold * peers_root:
+                        skip_prune = True
+                        skipped_family += 1
+                        break
+
+        if skip_prune:
+            continue
+
+        # Determine peer counts and relative ranks
+        # Caution: len(t_rs) may be less than top_n which would skew the peer counts.
+        peers_root = len(root_ts[r_idx])
+        peers_t = max(top_n, len(t_rs[t_idx]))
+        bottom_half = (
+            entry["ValueRank_Root"] > threshold * peers_root and entry["RootRank_Value"] > threshold * peers_t
+        )
+
+        # These are not the global rank cutoffs
+        if "VPCRank_Root" in entry and "RootRank_VPC" in entry:
+            peers_root_vpc = len(root_ts[r_idx])
+            peers_t_vpc = len(t_rs[t_idx])
+            bottom_half = bottom_half and (
+                entry["VPCRank_Root"] > threshold * peers_root_vpc
+                and entry["RootRank_VPC"] > threshold * peers_t_vpc
+            )
+
+        if bottom_half:
+            solver_graph[t_idx]["prizes"][r_idx] = 0
+            prunable_entries.append(entry)
+
+    logger.info(
+        f"      checked {len(tr_data)} pairs; skipped {skipped_family} family-low-per-r;"
+        f" nullifying {len(prunable_entries)} low-rank terminal-root pairs"
+    )
+
+    nullify_prize_entries(solver_graph, data, prunable_entries)
+    prune_null_prize_entries(solver_graph, prunable_entries)
+
+    solver_graph.attrs["terminal_indices"] = terminal_indices
+
+
+def reduce_prize_data(data: dict[str, Any]) -> None:
+    """Apply pruning and reduction logic to terminal prize entries.
+
+    SAFETY: The solver_graph is modified in-place! Be sure the reference graph `data["G"]`
+    is not a shallow copy to either the graph or underlying data by using `deepcopy(G.copy())`.
+    """
+    solver_graph = data.get("solver_graph")
+    assert isinstance(solver_graph, PyDiGraph)
+
+    logger.info("    reducing prize data...")
+
+    # 'data' members are nested structures and must be deepcopied
+    solver_graph.attrs["families"] = deepcopy(data["families"])
+    solver_graph.attrs["terminal_root_prizes"] = deepcopy(data["terminal_root_prizes"])
+    solver_graph.attrs["prizes_by_terminal_view"] = deepcopy(data["prizes_by_terminal_view"])
+    solver_graph.attrs["prizes_by_root_view"] = deepcopy(data["prizes_by_root_view"])
+    solver_graph.attrs["prize_ranks"] = deepcopy(data["prize_ranks"])
+
+    # TODO: apply_prize_filtering(solver_graph, data)
+
+    apply_top_n_filtering(solver_graph, data)
+    apply_post_topN_filtered_pruning(solver_graph, data)
+    prune_prize_drained_terminals(solver_graph)
+
+    terminal_indices = solver_graph.attrs["terminal_indices"]
+    logger.debug("Active t-r pairs:")
+    town_to_region_map = {int(town): region for region, town in data["affiliated_town_region"].items()}
+    for terminal_index in sorted(terminal_indices):
+        node = solver_graph[terminal_index]
+        prizes = node["prizes"]
+        for root, prize in prizes.items():
+            town = solver_graph[root]["waypoint_key"]
+            region = town_to_region_map[int(town)]
+            node_weight = node["need_exploration_point"]
+            path_weight = data["all_pairs_path_lengths"].get((root, terminal_index), 2**31)
+            logger.debug(
+                f"{node['waypoint_key']:>5} {region:>5} {town:>5} {prize:>5} {node_weight:>5} {path_weight:>5}"
+            )

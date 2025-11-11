@@ -22,7 +22,7 @@ def set_graph_terminal_sets_attribute(graph: rx.PyDiGraph, terminals: dict[int, 
     for t_key, r_key in terminals.items():
         terminal_sets[node_key_by_index.inv[r_key]].append(node_key_by_index.inv[t_key])
 
-    attrs["terminals"] = terminals
+    attrs["terminal_indices"] = terminals
     attrs["terminal_sets"] = terminal_sets
     graph.attrs = attrs
 
@@ -70,8 +70,8 @@ def inject_super_root(config: dict, G: rx.PyDiGraph, flow_direction: str = "inbo
 
 
 def subgraph_stable(
-    indices: list[int] | set[int], source_graph: rx.PyGraph, inclusive: bool = True
-) -> rx.PyGraph:
+    indices: list[int] | set[int], source_graph: rx.PyGraph | rx.PyDiGraph, inclusive: bool = True
+) -> rx.PyGraph | rx.PyDiGraph:
     """Copies ref graph and deletes all nodes not in indices if inclusive is True.
 
     This generates a subgraph that has 1:1 index matching with ref_graph which eliminates

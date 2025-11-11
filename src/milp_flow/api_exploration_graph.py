@@ -137,14 +137,23 @@ def get_exploration_graph(config: dict) -> rx.PyGraph | rx.PyDiGraph:
 
 def get_all_pairs_path_lengths(graph: rx.PyGraph | rx.PyDiGraph) -> dict[tuple[int, int], int]:
     """Calculates and returns the node weighted shortest paths for all pairs."""
-    all_paths = rx.all_pairs_dijkstra_shortest_paths(graph, edge_cost_fn=lambda edge_data: 1.0)
+    has_edge_data = False
+    for edge in graph.edges():
+        if edge is not None and edge.get("need_exploration_point") is not None:
+            has_edge_data = True
+            break
+    if not has_edge_data:
+        for u, v in graph.edge_list():
+            graph.update_edge(u, v, {"need_exploration_point": graph[v]["need_exploration_point"]})
+    all_paths = rx.all_pairs_dijkstra_shortest_paths(
+        graph, edge_cost_fn=lambda edge_data: edge_data["need_exploration_point"]
+    )
     path_lengths: dict[tuple[int, int], int] = {}
     for u, paths_from_source in all_paths.items():
         u_cost = graph[u]["need_exploration_point"]
         for v, path_nodes in paths_from_source.items():
             cost = u_cost + sum(graph[w]["need_exploration_point"] for w in path_nodes)
-            pair = (u, v) if u < v else (v, u)
-            path_lengths[pair] = min(cost, path_lengths.get(pair, 2**31))
+            path_lengths[(u, v)] = cost
     return path_lengths
 
 
