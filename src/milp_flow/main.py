@@ -107,12 +107,9 @@ def main():
 
     # all combos of arg_set options
     arg_sets = []
-    for cr_pairs in [True]:
-        for prize_scale in [True]:
-            for root_cost in [True]:
-                # for cr_pairs in [True, False]:
-                #     for prize_scale in [True, False]:
-                #         for root_cost in [True, False]:
+    for cr_pairs in [True, False]:
+        for prize_scale in [True, False]:
+            for root_cost in [True, False]:
                 arg_sets.append({
                     "do_prune": True,
                     "do_reduce": True,
@@ -127,7 +124,7 @@ def main():
     seed(r"src\milp_flow\data\en_lta_prices.json")
 
     budgets = range(50, 625, 25)
-    SKIP_TO = (50, 1, 8, False, True, True, True)
+    SKIP_TO = (550, 1, 8, False, True, True, True)
     FOUND = False
     break_out = False
     data = {}
@@ -136,105 +133,104 @@ def main():
         highs_seed = randint(0, 2**31 - 1)  # HiGHS ranges from 0 to 2^31 - 1
 
         print(f"== Budget: {budget} (highs_seed: {highs_seed}) ==")
+        # for num_processes in [1, 7]:
         for num_processes in [1]:
-            # for num_processes in [1, 7]:
             # for num_threads in [1, 8]:
-            #     if num_processes == 1 and num_threads == 1:  # regularly worse than (1, 8) by milliseconds
-            #         continue
-            num_threads = 8
-            for do_solution_share in [False]:
-                # for do_solution_share in [True, False]:
-                if num_processes == 1 and do_solution_share:  # invalid combination
+            for num_threads in [8]:
+                if num_processes == 1 and num_threads == 1:  # regularly worse than (1, 8) by milliseconds
                     continue
-
-                for args in arg_sets:
-                    if break_out:
-                        break
-
-                    args["processor"] = (num_processes, num_threads)
-                    test_args = (
-                        budget,
-                        num_processes,
-                        num_threads,
-                        do_solution_share,
-                        args["cr_pairs"],
-                        args["prize_scale"],
-                        args["root_cost"],
-                    )
-                    FOUND = True if test_args == SKIP_TO else FOUND
-                    if not FOUND:
-                        # advance rng by the count of clones missed
-                        if num_processes > 1:
-                            seed(highs_seed)
-                            _ = [randint(0, 2**31 - 1) for _ in range(num_processes - 1)]
-                            # logger.info(
-                            #     f"  skipping seeds: {[randint(0, 2**31 - 1) for _ in range(num_processes - 1)]}"
-                            # )
+                for do_solution_share in [True, False]:
+                    if num_processes == 1 and do_solution_share:  # invalid combination
                         continue
 
-                    terminal_count_max_limit = round(
-                        3.98980981766944
-                        + 0.552618716162738 * budget
-                        + 2.98921916296481e-7 * budget**3
-                        - 0.000503850929485882 * budget**2
-                    )
-                    config: dict = {
-                        "name": "Empire",
-                        "budget": budget,
-                        "top_n": 6,
-                        "nearest_n": 7,
-                        "max_waypoint_ub": 17,
-                        "prune_prizes": True,
-                        "capacity_mode": "min",
-                        "transit_prune": True,
-                        "transit_reduce": True,
-                        "transit_basin_type": 2,
-                        "terminal_count_min_limit": floor(terminal_count_max_limit * 0.60),
-                        "terminal_count_max_limit": terminal_count_max_limit,
-                    }
-                    solver_config = {
-                        # "highs_analysis_level": 128,
-                        "log_to_console": False if budget <= 300 else True,
-                        "mip_feasibility_tolerance": 1e-4,
-                        "mip_heuristic_run_root_reduced_cost": args["root_cost"],
-                        "mip_min_logging_interval": 60,
-                        "mip_rel_gap": 1e-4,
-                        "mip_share_incumbent_solution": do_solution_share,
-                        "num_processes": num_processes,  # concurrent processes
-                        # "primal_feasibility_tolerance": 1e-4,
-                        "random_seed": highs_seed,  # set to 0 for internal HiGHS seed and seed + i for concurrent HiGHS instances
-                        "threads": num_threads,  # HiGHS internal threads
-                        "time_limit": inf,
-                    }
-                    config["solver"] = solver_config
+                    for args in [arg_sets[0]]:
+                        if break_out:
+                            break
 
-                    logger.info("-" * 80)
-                    logger.info(f"  Budget: {budget} shared: {do_solution_share} {args=}")
-                    logger.info(f"  {config=}")
+                        args["processor"] = (num_processes, num_threads)
+                        test_args = (
+                            budget,
+                            num_processes,
+                            num_threads,
+                            do_solution_share,
+                            args["cr_pairs"],
+                            args["prize_scale"],
+                            args["root_cost"],
+                        )
+                        FOUND = True if test_args == SKIP_TO else FOUND
+                        if not FOUND:
+                            # advance rng by the count of clones missed
+                            if num_processes > 1:
+                                seed(highs_seed)
+                                _ = [randint(0, 2**31 - 1) for _ in range(num_processes - 1)]
+                                # logger.info(
+                                #     f"  skipping seeds: {[randint(0, 2**31 - 1) for _ in range(num_processes - 1)]}"
+                                # )
+                            continue
 
-                    if not data:
-                        data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
-                        generate_graph_data(data)
+                        terminal_count_max_limit = round(
+                            3.98980981766944
+                            + 0.552618716162738 * budget
+                            + 2.98921916296481e-7 * budget**3
+                            - 0.000503850929485882 * budget**2
+                        )
+                        config: dict = {
+                            "name": "Empire",
+                            "budget": budget,
+                            "top_n": 6,
+                            "nearest_n": 7,
+                            "max_waypoint_ub": 17,
+                            "prune_prizes": True,
+                            "capacity_mode": "min",
+                            "transit_prune": True,
+                            "transit_reduce": True,
+                            "transit_basin_type": 2,
+                            "terminal_count_min_limit": floor(terminal_count_max_limit * 0.60),
+                            "terminal_count_max_limit": terminal_count_max_limit,
+                            "pruning_offsets": {"min": -5, "max": -10},
+                        }
+                        solver_config = {
+                            # "highs_analysis_level": 128,
+                            "log_to_console": False if budget <= 300 else True,
+                            "mip_feasibility_tolerance": 1e-4,
+                            "mip_heuristic_run_root_reduced_cost": False,
+                            "mip_min_logging_interval": 60,
+                            "mip_rel_gap": 1e-4,
+                            "mip_share_incumbent_solution": do_solution_share,
+                            "num_processes": num_processes,  # concurrent processes
+                            # "primal_feasibility_tolerance": 1e-4,
+                            "random_seed": highs_seed,  # set to 0 for internal HiGHS seed and seed + i for concurrent HiGHS instances
+                            "threads": num_threads,  # HiGHS internal threads
+                            "time_limit": inf,
+                        }
+                        config["solver"] = solver_config
 
-                    data["config"] = config
-                    solver_graph = deepcopy(data["G"].copy())
-                    solver_graph.attrs = deepcopy(data["G"].attrs)
-                    data["solver_graph"] = solver_graph
+                        logger.info("-" * 80)
+                        logger.info(f"  Budget: {budget} shared: {do_solution_share} {args=}")
+                        logger.info(f"  {config=}")
 
-                    if config["prune_prizes"]:
-                        reduce_prize_data(data)
-                    if config["transit_reduce"]:
-                        reduce_transit_data(data)
+                        if not data:
+                            data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
+                            generate_graph_data(data)
 
-                    # model, terminal_sets = optimize(data, args["cr_pairs"], args["prize_scale"])
-                    model, terminal_sets = optimize(data, args["cr_pairs"], prize_scale=True)
+                        data["config"] = config
+                        solver_graph = deepcopy(data["G"].copy())
+                        solver_graph.attrs = deepcopy(data["G"].attrs)
+                        data["solver_graph"] = solver_graph
 
-                    highs_runtime = model.getRunTime()
-                    logger.success(
-                        f"Elapsed Time: {highs_runtime:.2f}  Budget: {budget} Objective: {model.getObjectiveValue()} Shared: {do_solution_share}\n{args=}"
-                    )
-                    logger.info("-" * 80)
-                    # break_out = True
+                        if config["prune_prizes"]:
+                            reduce_prize_data(data)
+                        if config["transit_reduce"]:
+                            reduce_transit_data(data)
+
+                        model, terminal_sets = optimize(data, args["cr_pairs"], args["prize_scale"])
+
+                        highs_runtime = model.getRunTime()
+                        logger.success(
+                            f"Elapsed Time: {highs_runtime:.2f}  Budget: {budget} Objective: {model.getObjectiveValue()} Shared: {do_solution_share}\n{args=}"
+                        )
+                        logger.info("-" * 80)
+                        # break_out = True
 
 
 if __name__ == "__main__":

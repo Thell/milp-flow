@@ -237,7 +237,7 @@ def create_model(
         logger.info(f"*** setting terminal_count_max_limit = {t_count_ub}")
         model.addConstr(model.qsum(x[t] for t in terminal_indices) <= t_count_ub)
 
-    # (Terminal, root) assignment constraints
+    # (Terminal, Root) assignment constraints
     for r in roots_indices:
         assigned = model.qsum(x_t_r[(t, r)] for t in terminal_indices if (t, r) in x_t_r)
         # Any terminal assigned to root selects root
@@ -248,6 +248,10 @@ def create_model(
         model.addConstr(x[t] >= assigned)
         # Terminals may be assigned to at most a single root
         model.addConstr(assigned <= 1)
+        # Terminals must not be selected if not assigned
+        model.addConstr(x[t] <= assigned)
+
+    # (Super Terminal, Super Root) assignment constraints
     if super_root_index is not None:
         # Super root must be selected
         model.addConstr(x[super_root_index] == 1)

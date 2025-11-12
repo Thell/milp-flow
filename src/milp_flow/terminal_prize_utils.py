@@ -2,8 +2,7 @@
 """Utilities for terminal prize data ranking."""
 
 from enum import Enum
-from collections import defaultdict
-import math
+from collections import Counter, defaultdict
 from typing import Any
 
 from loguru import logger
@@ -29,6 +28,141 @@ def sort_key_net_path_cost(entry):
     return entry["value"] / entry["path_cost"]
 
 
+class Category(str, Enum):
+    ONLY_CHILD = "only_child"
+    DOMINANT = "dominant"
+    PROTECTED = "protected"
+
+
+class PCTThresholdLookup:
+    """Lookup for per-category PCT thresholds by budget and cap_mode."""
+
+    def __init__(
+        self, thresholds_data: dict[str, dict[int, dict[str, float]]], offsets: dict[str, int] | None = None
+    ):
+        self.thresholds = thresholds_data
+        self.offsets = offsets
+        self._validate()
+
+        if self.offsets is None:
+            self.offsets = {"min": 0, "max": 0}
+        logger.info(f"      pruning threshold offsets: {self.offsets}")
+
+    def _validate(self):
+        valid_cats = [c.value for c in Category]
+        for cap_mode, budget_dict in self.thresholds.items():
+            if cap_mode not in ["min", "max"]:
+                raise ValueError(f"Invalid cap_mode: {cap_mode}")
+            for budget, cat_dict in budget_dict.items():
+                if budget < 0:
+                    raise ValueError(f"Invalid budget: {budget}")
+                for cat, pct in cat_dict.items():
+                    if cat not in valid_cats:
+                        raise ValueError(f"Invalid category: {cat}")
+                    if not 0 <= pct <= 100:
+                        raise ValueError(f"Invalid pct for {cat}: {pct}")
+
+    def get_threshold(
+        self, budget: int, cap_mode: str, category: str, fallback_next_highest: bool = True
+    ) -> float:
+        if cap_mode not in self.thresholds:
+            raise ValueError(f"Unknown cap_mode: {cap_mode}")
+        budget_dict = self.thresholds[cap_mode]
+        if budget in budget_dict and category in budget_dict[budget]:
+            return budget_dict[budget][category]
+
+        if fallback_next_highest:
+            # Next highest budget >= input
+            candidates = [b for b in sorted(budget_dict.keys()) if b >= budget]
+            if candidates:
+                nearest_higher = min(candidates)
+                if category in budget_dict[nearest_higher]:
+                    logger.debug(f"Used next highest budget {nearest_higher} for {budget}")
+                    return budget_dict[nearest_higher][category] + self.offsets[cap_mode]
+
+        logger.debug(
+            f"No threshold for budget {budget}, cap {cap_mode}, category {category} using 1/2 600 Budget threshold"
+        )
+        return 0.5 * budget_dict[600][category]
+
+
+# Global instance (hardcode table)
+_THRESHOLDS_DATA: dict[str, dict[int, dict[str, float]]] = {
+    "min": {
+        50: {Category.ONLY_CHILD: 98, Category.DOMINANT: 98, Category.PROTECTED: 97},
+        75: {Category.ONLY_CHILD: 98, Category.DOMINANT: 98, Category.PROTECTED: 97},
+        100: {Category.ONLY_CHILD: 98, Category.DOMINANT: 97, Category.PROTECTED: 97},
+        125: {Category.ONLY_CHILD: 98, Category.DOMINANT: 95, Category.PROTECTED: 95},
+        150: {Category.ONLY_CHILD: 95, Category.DOMINANT: 95, Category.PROTECTED: 95},
+        175: {Category.ONLY_CHILD: 93, Category.DOMINANT: 95, Category.PROTECTED: 95},
+        200: {Category.ONLY_CHILD: 93, Category.DOMINANT: 95, Category.PROTECTED: 95},
+        225: {Category.ONLY_CHILD: 93, Category.DOMINANT: 95, Category.PROTECTED: 95},
+        250: {Category.ONLY_CHILD: 93, Category.DOMINANT: 95, Category.PROTECTED: 90},
+        275: {Category.ONLY_CHILD: 93, Category.DOMINANT: 90, Category.PROTECTED: 89},
+        300: {Category.ONLY_CHILD: 93, Category.DOMINANT: 90, Category.PROTECTED: 89},
+        325: {Category.ONLY_CHILD: 89, Category.DOMINANT: 90, Category.PROTECTED: 75},
+        350: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        375: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        400: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        425: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        450: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        475: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        500: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        525: {Category.ONLY_CHILD: 79, Category.DOMINANT: 85, Category.PROTECTED: 75},
+        550: {Category.ONLY_CHILD: 79, Category.DOMINANT: 84, Category.PROTECTED: 75},
+        575: {Category.ONLY_CHILD: 79, Category.DOMINANT: 84, Category.PROTECTED: 75},
+        600: {Category.ONLY_CHILD: 79, Category.DOMINANT: 84, Category.PROTECTED: 75},
+    },
+    "max": {
+        50: {Category.ONLY_CHILD: 99, Category.DOMINANT: 99, Category.PROTECTED: 99},
+        75: {Category.ONLY_CHILD: 99, Category.DOMINANT: 95, Category.PROTECTED: 97},
+        100: {Category.ONLY_CHILD: 98, Category.DOMINANT: 95, Category.PROTECTED: 95},
+        125: {Category.ONLY_CHILD: 95, Category.DOMINANT: 93, Category.PROTECTED: 94},
+        150: {Category.ONLY_CHILD: 95, Category.DOMINANT: 93, Category.PROTECTED: 94},
+        175: {Category.ONLY_CHILD: 95, Category.DOMINANT: 93, Category.PROTECTED: 89},
+        200: {Category.ONLY_CHILD: 95, Category.DOMINANT: 93, Category.PROTECTED: 89},
+        225: {Category.ONLY_CHILD: 95, Category.DOMINANT: 91, Category.PROTECTED: 82},
+        250: {Category.ONLY_CHILD: 93, Category.DOMINANT: 91, Category.PROTECTED: 72},
+        275: {Category.ONLY_CHILD: 93, Category.DOMINANT: 90, Category.PROTECTED: 72},
+        300: {Category.ONLY_CHILD: 93, Category.DOMINANT: 90, Category.PROTECTED: 72},
+        325: {Category.ONLY_CHILD: 93, Category.DOMINANT: 90, Category.PROTECTED: 72},
+        350: {Category.ONLY_CHILD: 93, Category.DOMINANT: 90, Category.PROTECTED: 72},
+        375: {Category.ONLY_CHILD: 93, Category.DOMINANT: 89, Category.PROTECTED: 72},
+        400: {Category.ONLY_CHILD: 89, Category.DOMINANT: 87, Category.PROTECTED: 72},
+        425: {Category.ONLY_CHILD: 89, Category.DOMINANT: 87, Category.PROTECTED: 72},
+        450: {Category.ONLY_CHILD: 89, Category.DOMINANT: 87, Category.PROTECTED: 72},
+        475: {Category.ONLY_CHILD: 88, Category.DOMINANT: 84, Category.PROTECTED: 72},
+        500: {Category.ONLY_CHILD: 88, Category.DOMINANT: 84, Category.PROTECTED: 58},
+        525: {Category.ONLY_CHILD: 86, Category.DOMINANT: 84, Category.PROTECTED: 58},
+        550: {Category.ONLY_CHILD: 82, Category.DOMINANT: 84, Category.PROTECTED: 58},
+        575: {Category.ONLY_CHILD: 82, Category.DOMINANT: 84, Category.PROTECTED: 58},
+        600: {Category.ONLY_CHILD: 82, Category.DOMINANT: 84, Category.PROTECTED: 58},
+    },
+}
+
+
+def assign_terminal_categories(G: PyDiGraph, families: dict[int, list[int]]) -> None:
+    """Assign global category ('only_child', 'dominant', 'protected') to each terminal node."""
+    logger.info("    assigning terminal categories...")
+    terminal_categories = {}
+    for parent, family_ts in families.items():
+        family_size = len(family_ts)
+        if family_size == 1:
+            category = Category.ONLY_CHILD.value
+            G[family_ts[0]]["category"] = category
+            terminal_categories[family_ts[0]] = category
+            continue
+
+        # Dominant: max top ranked prize value across all terminals
+        dominant_t = max(family_ts, key=lambda t: max(G[t]["prizes"].values()))
+        for t in family_ts:
+            category = Category.DOMINANT.value if t == dominant_t else Category.PROTECTED.value
+            terminal_categories[t] = category
+            G[t]["category"] = category
+            G[t]["protector"] = dominant_t
+    logger.info(f"      category counts: {dict(Counter(terminal_categories.values()))}")
+
+
 def get_terminal_families(G: PyDiGraph) -> dict[int, list[int]]:
     """Returns a dict of terminal families by parent index."""
     terminal_indices = G.attrs["terminal_indices"]
@@ -40,28 +174,6 @@ def get_terminal_families(G: PyDiGraph) -> dict[int, list[int]]:
             families.setdefault(parent, []).append(i)
 
     return families
-
-
-def is_family_protected(
-    solver_graph: PyDiGraph, entry: dict[str, Any], rank_key: str, threshold: float
-) -> bool:
-    # Family safeguard: if any sibling in this family is strong for this root, skip prune
-    families = solver_graph.attrs["families"]
-    prizes_by_root = solver_graph.attrs["prizes_by_root_view"]
-
-    t_idx = entry["t_idx"]
-    r_idx = entry["r_idx"]
-    parents = list(solver_graph.predecessor_indices(t_idx))
-    if parents:
-        parent = parents[0]
-        family = families.get(parent, [])
-        if t_idx in family and len(family) > 1:
-            peers_root = len(prizes_by_root[r_idx])
-            for fam_t in family:
-                fam_entry = next((e for e in prizes_by_root[r_idx] if e["t_idx"] == fam_t), None)
-                if fam_entry and fam_entry[rank_key] <= threshold * peers_root:
-                    return True
-    return False
 
 
 def get_terminal_root_prizes(
@@ -217,70 +329,6 @@ def get_full_prize_ranks(
     return prize_ranks
 
 
-def get_pruning_threshold(budget: int, capacity_mode: str, key: str) -> float:
-    """Return the pruning threshold for the given key."""
-    if key == "top_n":
-        # ---------------------------------------------------------------
-        # Budget-dependent dynamic pruning threshold
-        # NOTE: Prunable entries are those ranked below this threshold
-        # TODO: Account for bonus lodging capacities - capacity_pressure
-        # ---------------------------------------------------------------
-        density_center = 100.0
-        divisor = 7.0
-        expected_ts = min(budget / divisor, density_center)
-        density = max(0.0, min(1.0, expected_ts / density_center))
-        # Dynamic range: small budgets prune aggressively, large budgets gently
-        threshold = 0.20 + 0.70 * density
-        logger.info(f"    pruning with threshold {threshold:.3f} (density={density:.3f})")
-        return threshold
-    elif key == "global":
-        # ---------------------------------------------------------------
-        # Budget-dependent dynamic global pruning threshold
-        # NOTE: Prunable entries are those with global percentile below this threshold
-        # TODO: Account for bonus lodging capacities - capacity_pressure
-        # ---------------------------------------------------------------
-        # From Eureqa solver:
-        #   For cap max unprotected: p = 1 - 0.05*ceil(0.978380561715232 + 0.000172951717438112*b + 1.96122942706322*floor(0.00330584990265254*b))
-        #   For cap max protected: p = 0.85 + 0.15*floor(5.74823974003092/log(b)) - 0.0499999999999999*ceil(0.762310778720475 + 0.00105235546552624*b)
-        #   For cap min unprotected: p = 1 - 0.05*ceil(0.828299998336353 + 7.34705470271906e-6*b^2)
-
-        # Unprotected coeffs (cubic: a*b^3 + b*b^2 + c*b + d)
-        if capacity_mode == "max":
-            coeffs = [1.84858620e-09, -1.32354602e-06, -1.01324762e-04, 9.63495200e-01]
-        else:  # min
-            # Constrained cubic fit for unprotected min (<= target, min abs error)
-            coeffs = [-1.02335329e-09, 9.06326991e-07, -4.79354896e-04, 9.72101497e-01]
-
-        b3, b2, b = budget**3, budget**2, budget
-        threshold = coeffs[0] * b3 + coeffs[1] * b2 + coeffs[2] * b + coeffs[3]
-        threshold = max(0.8, min(0.95, threshold))  # Table range cap
-        logger.info(f"      global pruning (unprotected baseline) threshold {threshold * 100:.1f}%")
-        return threshold
-    raise ValueError(f"Unknown pruning threshold key: {key}")
-
-
-def get_protected_threshold(budget: int, capacity_mode: str, key: str) -> float:
-    if key == "global":
-        if capacity_mode == "max":
-            # Eureqa symbolic for protected max
-            import math
-
-            term1 = (
-                0.978380561715232
-                + 0.000172951717438112 * budget
-                + 1.96122942706322 * math.floor(0.00330584990265254 * budget)
-            )
-            threshold = 1 - 0.05 * math.ceil(term1)
-        else:
-            # Quadratic fit for protected min
-            coeffs = [1.23e-7, -0.00078, 0.95]  # a*b^2 + c*b + d
-            threshold = coeffs[0] * budget**2 + coeffs[1] * budget + coeffs[2]
-        threshold = max(0.50, min(0.95, threshold))
-        logger.info(f"      protected global threshold {threshold * 100:.1f}%")
-        return threshold
-    raise ValueError(f"Unknown key: {key}")
-
-
 def nullify_prize_entries(
     solver_graph: PyDiGraph, data: dict[str, Any], prunable_entries: list[dict[str, int]]
 ):
@@ -333,93 +381,6 @@ def prune_prize_drained_terminals(solver_graph: PyDiGraph):
             removed += remove_solver_graph_node(solver_graph, t)
     solver_graph.attrs["terminal_indices"] = terminal_indices
     logger.info(f"      removed {removed} prize-drained terminals")
-
-
-# def rebuild_prize_data(solver_graph: PyDiGraph, data: dict[str, Any]):
-#     """Rebuild solver_graph prize data based on graph terminal updates during node/prize pruning."""
-#     logger.debug("    rebuilding prize data...")
-
-#     families = get_terminal_families(solver_graph)
-#     tr_data = get_terminal_root_prizes(solver_graph, data["all_pairs_path_lengths"])
-#     prizes_by_terminal_view = get_prizes_by_terminal_view(solver_graph, tr_data)
-#     prizes_by_root_view = get_prizes_by_root_view(solver_graph, tr_data)
-
-#     solver_graph.attrs["families"] = families
-#     solver_graph.attrs["terminal_root_prizes"] = tr_data
-#     solver_graph.attrs["prizes_by_terminal_view"] = prizes_by_terminal_view
-#     solver_graph.attrs["prizes_by_root_view"] = prizes_by_root_view
-
-#     # NOTE: The rank-based pruning thresholds must be based on the post-topN filtered data
-#     # so if top_n filtered results break the rank-based pruning, this will need to be updated
-#     # back to using these for the view arguments to get_full_prize_ranks
-#     #     data["prizes_by_root_view"],
-#     #     data["prizes_by_terminal_view"],
-#     solver_graph.attrs["prize_ranks"] = get_full_prize_ranks(
-#         solver_graph,
-#         tr_data,
-#         prizes_by_root_view,
-#         prizes_by_terminal_view,
-#     )
-
-
-def compute_family_dominants_and_protected(
-    G: PyDiGraph, tr_data: dict[tuple[int, int], dict[str, Any]], families: dict[int, list[int]]
-) -> dict[int, dict[int, int]]:
-    """Compute family dominants per root and set is_protected flags in tr_data."""
-    family_dominants = defaultdict(dict)
-    root_indices = G.attrs.get("root_indices", [])
-
-    # Initialize all entries to False
-    for entry in tr_data.values():
-        entry["is_protected"] = False
-
-    protected_count = 0
-    for r_idx in root_indices:
-        for parent, family in families.items():
-            if len(family) > 1:
-                family_entries = [tr_data[(t, r_idx)] for t in family if (t, r_idx) in tr_data]
-                logger.debug(
-                    f"Root {r_idx}, parent {parent}: family size {len(family)}, entries found {len(family_entries)}"
-                )
-                if family_entries:
-                    dominant = max(family_entries, key=lambda e: e["value"] / e["path_cost"])
-                    family_dominants[r_idx] = dominant["t_idx"]
-                    for entry in family_entries:
-                        entry["is_protected"] = entry["t_idx"] != dominant["t_idx"]
-                        if entry["is_protected"]:
-                            protected_count += 1
-    logger.info(f"      total protected entries set: {protected_count}")
-    return family_dominants
-
-
-def rebuild_prize_data(solver_graph: PyDiGraph, data: dict[str, Any]):
-    """Rebuild solver_graph prize data based on graph terminal updates during node/prize pruning."""
-    logger.debug("    rebuilding prize data...")
-
-    families = get_terminal_families(solver_graph)
-    tr_data = get_terminal_root_prizes(solver_graph, data["all_pairs_path_lengths"])
-    prizes_by_terminal_view = get_prizes_by_terminal_view(solver_graph, tr_data)
-    prizes_by_root_view = get_prizes_by_root_view(solver_graph, tr_data)
-
-    solver_graph.attrs["families"] = families
-    solver_graph.attrs["terminal_root_prizes"] = tr_data
-    solver_graph.attrs["prizes_by_terminal_view"] = prizes_by_terminal_view
-    solver_graph.attrs["prizes_by_root_view"] = prizes_by_root_view
-
-    family_dominants = compute_family_dominants_and_protected(solver_graph, tr_data, families)
-    solver_graph.attrs["family_dominants"] = family_dominants
-
-    # NOTE: The rank-based pruning thresholds must be based on the post-topN filtered data
-    # so if top_n filtered results break the rank-based pruning, this will need to be updated
-    # back to using these for the view arguments to get_full_prize_ranks
-    #     data["prizes_by_root_view"],
-    #     data["prizes_by_terminal_view"],
-    solver_graph.attrs["prize_ranks"] = get_full_prize_ranks(
-        solver_graph,
-        tr_data,
-        prizes_by_root_view,
-        prizes_by_terminal_view,
-    )
 
 
 def remove_solver_graph_node(solver_graph: PyDiGraph, i: int) -> bool:

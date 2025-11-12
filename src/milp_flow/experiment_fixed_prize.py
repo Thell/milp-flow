@@ -1,7 +1,7 @@
 # experiment_fixed_prize.py
 """
 - A fixed prize of '1' will yield the maximum terminal count of a budget.
-- A fixed prize of 'path_cost' should yield the minimum terminal count of a budget. (TODO: Add this test case.)
+- TODO: Figure out a good min terminal experiment
 """
 
 from collections import Counter
@@ -35,6 +35,7 @@ def main():
         "transit_prune": False,
         "transit_reduce": False,
         "transit_basin_type": 0,
+        "budget_equality": "eq",
     }
     solver_config = {
         "log_to_console": True,
@@ -61,21 +62,20 @@ def main():
 
     experiments = {}
 
-    for capacity_mode in ["max", "min"]:
+    for capacity_mode in ["min", "max"]:
         data = {}
         config["capacity_mode"] = capacity_mode
 
         step = 25
-        prev_terminal_count = 245
+        prev_terminal_count = 0
 
-        for budget in range(600, 626, step):
+        for budget in range(50, 626, step):
             highs_seed = randint(0, 2**31 - 1)  # HiGHS ranges from 0 to 2^31 - 1
             config["solver"]["random_seed"] = highs_seed
             config["budget"] = budget
-            config["terminal_count_min_limit"] = prev_terminal_count
-            config["terminal_count_max_limit"] = (
-                prev_terminal_count + step // 2
-            )  # Do half of the step when budget > 200 for max capacity
+            # Do half of the step when budget > 200 for max capacity
+            config["terminal_count_min_limit"] = 0  # use prev_terminal_count for max
+            config["terminal_count_max_limit"] = prev_terminal_count + step
 
             lodging_specification = ds.read_json("lodging_specifications.json")[capacity_mode]
             print(f"== Budget: {budget} (highs_seed: {highs_seed}) ==")
@@ -85,7 +85,7 @@ def main():
                     config, prices, modifiers, lodging_specification, grindTakenList
                 )
 
-                # Modify all prizes values to be the cycle counts
+                # Modify all prizes values to be 1 for max terminals
                 for t, entries in data["plant_values"].items():
                     for r, entry in entries.items():
                         entry["value"] = 1
@@ -103,7 +103,6 @@ def main():
             if config["transit_reduce"]:
                 reduce_transit_data(data)
 
-            # Don't scale when using cycle counts
             model, terminal_sets = optimize(data, cr_pairs=True, prize_scale=False, prev_terminals_sets=None)
 
             highs_runtime = model.getRunTime()

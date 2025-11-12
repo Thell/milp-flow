@@ -6,7 +6,6 @@ import json
 import re
 
 from loguru import logger
-from natsort import natsorted
 import pandas as pd
 from rustworkx import PyDiGraph
 from collections import defaultdict
@@ -15,7 +14,6 @@ from api_common import set_logger
 import data_store as ds
 from generate_graph_data import generate_graph_data
 from generate_reference_data import generate_reference_data
-import terminal_prize_utils as tpu
 
 
 def analyze_used_prizes(
@@ -24,11 +22,9 @@ def analyze_used_prizes(
     budget: int,
     capacity: str,
     prize_ranks: dict[int, dict[int, dict[str, Any]]],
-    families: dict[int, list[int]],
-    affiliated_town_region: dict[int, str],
     all_pairs_path_lengths: dict[tuple[int, int], float],
 ) -> pd.DataFrame:
-    """Analyze used prizes by rank from solved JSON + graph, marking only_child/dominant/protected categories."""
+    """Analyze used prizes by rank from solved JSON + graph, using full-graph categories."""
     key = f"highs-{capacity}-{budget}"
     if key not in solutions_json:
         raise ValueError(f"No data for {key}")
@@ -73,23 +69,6 @@ def analyze_used_prizes(
         }
     logger.info(f"{key}: skipped {skipped_zero} zero-prize entries; len(selected_tr) = {len(selected_tr)}")
 
-    # Solution-subset family groups per root
-    solution_family_groups = defaultdict(lambda: defaultdict(list))  # r -> parent -> [ts]
-    for t, r in terminal_sets.items():
-        if not solver_graph.has_node(t) or (t, r) not in selected_tr:
-            continue
-        parents = list(solver_graph.predecessor_indices(t))
-        parent = parents[0] if parents else None
-        solution_family_groups[r][parent].append(t)
-
-    # Precompute dominants per r's groups
-    dominants_per_group = {}  # (r, parent) -> dominant_t
-    for r, parent_groups in solution_family_groups.items():
-        for parent, group in parent_groups.items():
-            if len(group) > 1:
-                dominant_t = max(group, key=lambda tt: selected_tr[(tt, r)]["vpc"])
-                dominants_per_group[(r, parent)] = dominant_t
-
     used_data = []
     default_ranks = {
         "root_prize_value_pct_by_terminal_view": inf,
@@ -100,6 +79,7 @@ def analyze_used_prizes(
     }
     category_counts = defaultdict(int)
 
+    families = data["families"]
     for t, r in terminal_sets.items():
         if not solver_graph.has_node(t) or (t, r) not in selected_tr:
             logger.warning(f"Terminal {t} not in solver_graph or zero-prize (skipping).")
@@ -110,24 +90,14 @@ def analyze_used_prizes(
         if rank_info["terminal_prize_value_pct_by_root_view"] == inf:
             logger.warning(f"No rank info for terminal {t} and root {r}.")
 
-        # --- Category assignment ---
+        # Full-graph category and family_size
+        category = t_node.get("category", "only_child")
         parents = list(solver_graph.predecessor_indices(t))
         parent = parents[0] if parents else None
-        group_key = (r, parent)
-        group = solution_family_groups[r].get(parent, [])
-
-        if len(group) == 1:
-            category = "only_child"
-        else:
-            dominant_t = dominants_per_group.get(group_key)
-            if dominant_t is None:
-                logger.warning(f"{key}: missing dominant for group {group_key} (t={t}, r={r}, group={group})")
-                category = "only_child"  # fallback
-            else:
-                category = "dominant" if t == dominant_t else "protected"
+        family_size = len(families.get(parent, [t]))
 
         category_counts[category] += 1
-        logger.debug(f"{key}: t={t} r={r} parent={parent} group_size={len(group)} category={category}")
+        logger.debug(f"{key}: t={t} r={r} parent={parent} family_size={family_size} category={category}")
 
         used_data.append({
             "budget": budget,
@@ -139,7 +109,7 @@ def analyze_used_prizes(
             "terminal_prize_value_global_pct": rank_info["terminal_prize_value_global_pct"],
             "terminal_prize_net_t_cost_global_pct": rank_info["terminal_prize_net_t_cost_global_pct"],
             "terminal_prize_net_path_cost_global_pct": rank_info["terminal_prize_net_path_cost_global_pct"],
-            "family_size": len(group),
+            "family_size": family_size,
             "category": category,
             "value": selected_tr[(t, r)]["value"],
             "vpc": selected_tr[(t, r)]["vpc"],
@@ -159,9 +129,7 @@ def run_analysis(data: dict[str, Any], cap_mode: str) -> pd.DataFrame | None:
         return None
 
     all_pairs_path_lengths = data["all_pairs_path_lengths"]
-    affiliated_town_region = data["affiliated_town_region"]
     prize_ranks = data["prize_ranks"]
-    families = data["families"]
 
     analyses = []
     for key, _ in solutions_json.items():
@@ -177,8 +145,6 @@ def run_analysis(data: dict[str, Any], cap_mode: str) -> pd.DataFrame | None:
                 budget,
                 cap,
                 prize_ranks,
-                families,
-                affiliated_town_region,
                 all_pairs_path_lengths,
             )
             if not df.empty:
@@ -201,12 +167,11 @@ if __name__ == "__main__":
     config: dict[str, Any] = {
         "name": "Empire",
         "budget": 50,
-        "top_n": 30,
+        "top_n": 0,
         "nearest_n": 30,
         "max_waypoint_ub": 30,
-        "prune_prizes": True,
+        "prune_prizes": False,
         "capacity_mode": "min",
-        "analyze_solutions": True,
     }
     config["logger"] = {"level": "INFO", "format": "<level>{message}</level>"}
     config["solver"] = {}
@@ -222,11 +187,15 @@ if __name__ == "__main__":
             budgets.add(int(budget_str))
 
     all_analyses = []
+
+    # NOTE: Reference graph only needs to be generated once for each capacity mode!
     for cap in ["min", "max"]:
         lodging = min_lodging if cap == "min" else max_lodging
         config["capacity_mode"] = cap
         data = generate_reference_data(config, prices, modifiers, lodging, grind_taken_list)
         generate_graph_data(data)  # Populates data["prize_ranks"], data["families"], etc.
+
+        # NOTE: Don't do any top_n filtering or prize pruning for reference graph - all rankings are included!
 
         data["config"] = config
         solver_graph = deepcopy(data["G"].copy())

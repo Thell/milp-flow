@@ -89,8 +89,9 @@ def optimize(
     capacity_costs = {
         root: solver_graph[root]["capacity_cost"][root_used_capacities[root]] for root in root_used_capacities
     }
+    total_capacity_cost = sum(capacity_costs.values())
     logger.info(
-        f"capacity_costs = { {solver_graph[r]['waypoint_key']: c for r, c in capacity_costs.items()} }"
+        f"capacity_costs ({total_capacity_cost}) = { {solver_graph[r]['waypoint_key']: c for r, c in capacity_costs.items()} }"
     )
 
     logger.info(

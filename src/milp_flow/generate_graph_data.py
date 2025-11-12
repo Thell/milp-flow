@@ -206,9 +206,12 @@ def setup_prize_rank_data(G: PyDiGraph, data: dict[str, Any]):
         data["prizes_by_terminal_view"],
     )
 
-    logger.info("    identifying dominant and protected family entries...")
-    family_dominants = tpu.compute_family_dominants_and_protected(G, tr_data, families)
-    data["family_dominants"] = family_dominants
+    data["pct_thresholds_lookup"] = tpu.PCTThresholdLookup(
+        tpu._THRESHOLDS_DATA, data["config"]["pruning_offsets"]
+    )
+
+    logger.info("    identifying terminal categories...")
+    tpu.assign_terminal_categories(G, families)
 
 
 def generate_graph_data(data: dict[str, Any]):
