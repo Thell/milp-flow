@@ -6,6 +6,7 @@ from typing import Any
 from bidict import bidict
 from loguru import logger
 from rustworkx import PyDiGraph
+from api_exploration_graph import attach_metrics_to_graph
 import terminal_prize_utils as tpu
 
 # DEBUG_ROOTS = [1623, 1785, 1834, 2001]
@@ -207,7 +208,14 @@ def setup_prize_rank_data(G: PyDiGraph, data: dict[str, Any]):
     )
 
     data["pct_thresholds_lookup"] = tpu.PCTThresholdLookup(
-        tpu._THRESHOLDS_DATA, data["config"]["pruning_offsets"]
+        tpu._THRESHOLDS_DATA,
+        data["config"].get(
+            "prize_pruning_threshold_factors",
+            {
+                "min": {"only_child": 1, "dominant": 1, "protected": 1},
+                "max": {"only_child": 1, "dominant": 1, "protected": 1},
+            },
+        ),
     )
 
     logger.info("    identifying terminal categories...")
@@ -245,5 +253,6 @@ def generate_graph_data(data: dict[str, Any]):
     setup_roots(G, data)
     setup_node_transit_bounds(G, data)
     setup_prize_rank_data(G, data)
+    attach_metrics_to_graph(G, config={"use_asp_bc": True, "asp_cutoff": 20})
 
     data["G"] = G

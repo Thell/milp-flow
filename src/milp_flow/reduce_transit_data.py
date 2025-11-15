@@ -1,4 +1,4 @@
-# reduce_solver_graph.py
+# reduce_transit_data.py
 
 from typing import Any
 from bidict import bidict
@@ -15,10 +15,10 @@ from rustworkx import (
 DEBUG_ROOTS = []
 
 
-def prune_NPD1(solver_graph: PyDiGraph, quiet: bool = False) -> int:
+def prune_NTD1(solver_graph: PyDiGraph, quiet: bool = False) -> int:
     """In-Place removal of non-plant non-forced leaf nodes."""
     if not quiet:
-        logger.info("      pruning NPD1...")
+        logger.info("      pruning NTD1...")
 
     num_removed = 0
     while removal_nodes := [
@@ -126,7 +126,7 @@ def reduce_bounds_via_root_pruning(solver_graph: PyDiGraph):
             continue
 
         transit_subgraph, node_map = solver_graph.subgraph_with_nodemap(list(transit_nodes))
-        removed_count = prune_NPD1(transit_subgraph, quiet=True)
+        removed_count = prune_NTD1(transit_subgraph, quiet=True)
         surviving_transit_nodes = {node_map[i] for i in transit_subgraph.node_indices()}
         removed_transit_nodes = set(transit_nodes) - surviving_transit_nodes
         if removed_transit_nodes:
@@ -250,7 +250,7 @@ def setup_ranked_basin_bottlenecks(solver_graph: PyDiGraph):
         non_rank1_ts = set(transit_terminals) - set(rank1_ts)
         transit_subG_prime = transit_subG.copy()
         transit_subG_prime.remove_nodes_from([node_map.inv[t] for t in non_rank1_ts if t in node_map])
-        prune_NPD1(transit_subG_prime, quiet=True)
+        prune_NTD1(transit_subG_prime, quiet=True)
 
         if do_debug:
             logger.warning(f"rank1 terminals: {[solver_graph[n]['waypoint_key'] for n in rank1_ts]}")
@@ -338,6 +338,32 @@ def setup_ranked_basin_bottlenecks(solver_graph: PyDiGraph):
     logger.info(f"      computed ranked basins for {len(basins)} roots")
 
 
+def prune_low_asp_nodes(solver_graph: PyDiGraph, data: dict[str, Any]) -> int:
+    """Prune non-terminal nodes with low ASP betweenness (if enabled)."""
+    logger.info("      pruning low-ASP nodes...")
+    if not data["config"].get("transit_prune_low_asp", False):
+        return 0
+
+    metrics = solver_graph.attrs.get("exploration_metrics", {})
+    if "bc_tr_asp" not in metrics:
+        logger.warning("        no bc_tr_asp; skipping ASP prune")
+        return 0
+
+    untouchables = set(solver_graph.attrs["root_indices"]).union(solver_graph.attrs["terminal_indices"])
+
+    bc_asp = metrics["bc_tr_asp"]
+    max_score = max(bc_asp.values() or [1])
+    threshold = 0.0000012283633212355
+    low_asp = [n for n, score in bc_asp.items() if score < threshold and n not in untouchables]
+    num_pruned = 0
+    for n in low_asp:
+        logger.warning(f"        pruning low-ASP node {solver_graph[n]['waypoint_key']}")
+        solver_graph.remove_node(n)
+        num_pruned += 1
+    logger.warning(f"        pruned {num_pruned} low-ASP nodes (threshold={threshold:.4f})")
+    return num_pruned
+
+
 def reduce_transit_data(data: dict[str, Any]):
     """Reduces per root transit layer data via pruning and reduction.
 
@@ -354,15 +380,20 @@ def reduce_transit_data(data: dict[str, Any]):
     do_reduce = data["config"]["transit_reduce"]
 
     if do_prune:
+        # First pass
         # overall pruning of non terminal leaf nodes from graph
-        prune_NPD1(solver_graph)
-    if do_prune:
-        # NPD1 pruning of transit region boundary flow per root
+        prune_NTD1(solver_graph)
+        # NTD1 pruning of transit region boundary flow per root
         reduce_bounds_via_root_pruning(solver_graph)
     if do_reduce:
         # transit region boundary flow reductions
         reduce_bounds(solver_graph)
         # clean up transit layer tree branches
+        reduce_bounds_via_root_pruning(solver_graph)
+    if do_prune:
+        # Second pass
+        prune_low_asp_nodes(solver_graph, data)
+        prune_NTD1(solver_graph)
         reduce_bounds_via_root_pruning(solver_graph)
 
     if basin_type > 0:

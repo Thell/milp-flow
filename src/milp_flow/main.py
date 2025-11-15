@@ -107,9 +107,9 @@ def main():
 
     # all combos of arg_set options
     arg_sets = []
-    for cr_pairs in [True, False]:
+    for cr_pairs in [False, False]:
         for prize_scale in [True, False]:
-            for root_cost in [True, False]:
+            for root_cost in [False, False]:
                 arg_sets.append({
                     "do_prune": True,
                     "do_reduce": True,
@@ -124,7 +124,7 @@ def main():
     seed(r"src\milp_flow\data\en_lta_prices.json")
 
     budgets = range(50, 625, 25)
-    SKIP_TO = (550, 1, 8, False, True, True, True)
+    SKIP_TO = (550, 1, 8, False, False, True, False)
     FOUND = False
     break_out = False
     data = {}
@@ -177,17 +177,21 @@ def main():
                         config: dict = {
                             "name": "Empire",
                             "budget": budget,
-                            "top_n": 6,
-                            "nearest_n": 7,
-                            "max_waypoint_ub": 17,
-                            "prune_prizes": True,
+                            "top_n": 10,
+                            "nearest_n": 10,
+                            "max_waypoint_ub": 25,
+                            "prune_prizes": True,  # This currently discards optimal solution on budgets >= 550 even with .5 threshold
                             "capacity_mode": "min",
                             "transit_prune": True,
                             "transit_reduce": True,
                             "transit_basin_type": 2,
+                            "transit_prune_low_asp": False,
                             "terminal_count_min_limit": floor(terminal_count_max_limit * 0.60),
                             "terminal_count_max_limit": terminal_count_max_limit,
-                            "pruning_offsets": {"min": -5, "max": -10},
+                            "prize_pruning_threshold_factors": {
+                                "min": {"only_child": 0.5, "dominant": 0.5, "protected": 0.5},
+                                "max": {"only_child": 0.5, "dominant": 0.5, "protected": 0.5},
+                            },
                         }
                         solver_config = {
                             # "highs_analysis_level": 128,
@@ -218,10 +222,8 @@ def main():
                         solver_graph.attrs = deepcopy(data["G"].attrs)
                         data["solver_graph"] = solver_graph
 
-                        if config["prune_prizes"]:
-                            reduce_prize_data(data)
-                        if config["transit_reduce"]:
-                            reduce_transit_data(data)
+                        reduce_prize_data(data)
+                        reduce_transit_data(data)
 
                         model, terminal_sets = optimize(data, args["cr_pairs"], args["prize_scale"])
 

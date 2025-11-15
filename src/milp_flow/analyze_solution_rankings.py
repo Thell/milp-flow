@@ -23,6 +23,7 @@ def analyze_used_prizes(
     capacity: str,
     prize_ranks: dict[int, dict[int, dict[str, Any]]],
     all_pairs_path_lengths: dict[tuple[int, int], float],
+    families: dict[int, list[int]],
 ) -> pd.DataFrame:
     """Analyze used prizes by rank from solved JSON + graph, using full-graph categories."""
     key = f"highs-{capacity}-{budget}"
@@ -76,10 +77,11 @@ def analyze_used_prizes(
         "terminal_prize_value_global_pct": inf,
         "terminal_prize_net_t_cost_global_pct": inf,
         "terminal_prize_net_path_cost_global_pct": inf,
+        "terminal_prize_net_t_cost_pct_by_root_view": inf,
+        "terminal_prize_net_path_cost_pct_by_root_view": inf,
     }
     category_counts = defaultdict(int)
 
-    families = data["families"]
     for t, r in terminal_sets.items():
         if not solver_graph.has_node(t) or (t, r) not in selected_tr:
             logger.warning(f"Terminal {t} not in solver_graph or zero-prize (skipping).")
@@ -109,6 +111,12 @@ def analyze_used_prizes(
             "terminal_prize_value_global_pct": rank_info["terminal_prize_value_global_pct"],
             "terminal_prize_net_t_cost_global_pct": rank_info["terminal_prize_net_t_cost_global_pct"],
             "terminal_prize_net_path_cost_global_pct": rank_info["terminal_prize_net_path_cost_global_pct"],
+            "terminal_prize_net_t_cost_pct_by_root_view": rank_info[
+                "terminal_prize_net_t_cost_pct_by_root_view"
+            ],
+            "terminal_prize_net_path_cost_pct_by_root_view": rank_info[
+                "terminal_prize_net_path_cost_pct_by_root_view"
+            ],
             "family_size": family_size,
             "category": category,
             "value": selected_tr[(t, r)]["value"],
@@ -130,6 +138,7 @@ def run_analysis(data: dict[str, Any], cap_mode: str) -> pd.DataFrame | None:
 
     all_pairs_path_lengths = data["all_pairs_path_lengths"]
     prize_ranks = data["prize_ranks"]
+    families = data["families"]
 
     analyses = []
     for key, _ in solutions_json.items():
@@ -146,6 +155,7 @@ def run_analysis(data: dict[str, Any], cap_mode: str) -> pd.DataFrame | None:
                 cap,
                 prize_ranks,
                 all_pairs_path_lengths,
+                families,
             )
             if not df.empty:
                 analyses.append(df)
@@ -217,11 +227,20 @@ if __name__ == "__main__":
         # Convert category to Categorical to enforce order
         all_df["category"] = pd.Categorical(all_df["category"], categories=category_order, ordered=True)
 
-        # Metrics to produce reports for
+        # Metrics to produce reports for (root's perspective)
         metrics = [
-            ("terminal_prize_net_path_cost_global_pct", "solution_used_net_path_cost_summary.csv"),
-            ("terminal_prize_net_t_cost_global_pct", "solution_used_net_t_cost_summary.csv"),
-            ("terminal_prize_value_global_pct", "solution_used_value_summary.csv"),
+            (
+                "terminal_prize_value_pct_by_root_view",
+                "solution_used_value_by_root_view_summary.csv",
+            ),
+            (
+                "terminal_prize_net_t_cost_pct_by_root_view",
+                "solution_used_net_t_cost_by_root_view_summary.csv",
+            ),
+            (
+                "terminal_prize_net_path_cost_pct_by_root_view",
+                "solution_used_net_path_cost_by_root_view_summary.csv",
+            ),
         ]
 
         for metric_col, out_csv in metrics:
@@ -242,7 +261,7 @@ if __name__ == "__main__":
             df_clean = all_df.dropna(subset=[f"{metric_col}_bin"])
 
             summary = (
-                df_clean.groupby(["budget", "capacity", "category", f"{metric_col}_bin"])
+                df_clean.groupby(["budget", "capacity", "root", "category", f"{metric_col}_bin"])
                 .size()
                 .unstack(fill_value=0, level=f"{metric_col}_bin")
             )
@@ -255,10 +274,30 @@ if __name__ == "__main__":
 
             summary["Total"] = summary.sum(axis=1)
 
-            # Sort by category
-            summary = summary.sort_index(level=["budget", "capacity", "category"])
+            # Compute first non-zero bin for each row
+            first_non_zero_dict = {}
+            for idx in summary.index:
+                row = summary.loc[idx].drop("Total")  # Exclude Total from consideration
+                non_zero_cols_row = row[row > 0].index
+                if len(non_zero_cols_row) > 0:
+                    first_bin = min(non_zero_cols_row)
+                    first_val = int(first_bin.split("-")[0])
+                    first_non_zero_dict[idx] = first_val
+                else:
+                    first_non_zero_dict[idx] = None
 
-            print(f"\n=== Used Prizes/Terminals by {metric_col} Bin (by Budget/Cap/Category) ===\n", summary)
+            first_non_zero_series = pd.Series(first_non_zero_dict, index=summary.index)
+            # Insert after 'Total'
+            total_loc = summary.columns.get_loc("Total")
+            summary.insert(total_loc + 1, "first_non_zero_bin", first_non_zero_series)
+
+            # Sort by budget, capacity, root, category
+            summary = summary.sort_index(level=["budget", "capacity", "root", "category"])
+
+            print(
+                f"\n=== Used Prizes/Terminals by {metric_col} Bin (by Budget/Cap/Root/Category) ===\n",
+                summary,
+            )
             summary.to_csv(out_csv)
     else:
         raise ValueError("No valid budget/cap keys found in JSON.")

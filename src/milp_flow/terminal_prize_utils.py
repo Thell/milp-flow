@@ -38,15 +38,12 @@ class PCTThresholdLookup:
     """Lookup for per-category PCT thresholds by budget and cap_mode."""
 
     def __init__(
-        self, thresholds_data: dict[str, dict[int, dict[str, float]]], offsets: dict[str, int] | None = None
+        self, thresholds_data: dict[str, dict[int, dict[str, float]]], threshold_factors: dict[str, int]
     ):
         self.thresholds = thresholds_data
-        self.offsets = offsets
+        self.factors = threshold_factors
+        logger.info(f"      pruning threshold factors: {self.factors}")
         self._validate()
-
-        if self.offsets is None:
-            self.offsets = {"min": 0, "max": 0}
-        logger.info(f"      pruning threshold offsets: {self.offsets}")
 
     def _validate(self):
         valid_cats = [c.value for c in Category]
@@ -78,7 +75,7 @@ class PCTThresholdLookup:
                 nearest_higher = min(candidates)
                 if category in budget_dict[nearest_higher]:
                     logger.debug(f"Used next highest budget {nearest_higher} for {budget}")
-                    return budget_dict[nearest_higher][category] + self.offsets[cap_mode]
+                    return budget_dict[nearest_higher][category]
 
         logger.debug(
             f"No threshold for budget {budget}, cap {cap_mode}, category {category} using 1/2 600 Budget threshold"
@@ -86,7 +83,7 @@ class PCTThresholdLookup:
         return 0.5 * budget_dict[600][category]
 
 
-# Global instance (hardcode table)
+# Thresholds for using the net_path_cost pruning
 _THRESHOLDS_DATA: dict[str, dict[int, dict[str, float]]] = {
     "min": {
         50: {Category.ONLY_CHILD: 98, Category.DOMINANT: 98, Category.PROTECTED: 97},
@@ -139,6 +136,60 @@ _THRESHOLDS_DATA: dict[str, dict[int, dict[str, float]]] = {
         600: {Category.ONLY_CHILD: 82, Category.DOMINANT: 84, Category.PROTECTED: 58},
     },
 }
+
+# Thresholds for using the raw_value pruning
+# _THRESHOLDS_DATA: dict[str, dict[int, dict[str, float]]] = {
+#     "min": {
+#         50: {Category.ONLY_CHILD: 88, Category.DOMINANT: 69, Category.PROTECTED: 70},
+#         75: {Category.ONLY_CHILD: 88, Category.DOMINANT: 69, Category.PROTECTED: 67},
+#         100: {Category.ONLY_CHILD: 88, Category.DOMINANT: 69, Category.PROTECTED: 67},
+#         125: {Category.ONLY_CHILD: 88, Category.DOMINANT: 69, Category.PROTECTED: 61},
+#         150: {Category.ONLY_CHILD: 87, Category.DOMINANT: 69, Category.PROTECTED: 61},
+#         175: {Category.ONLY_CHILD: 83, Category.DOMINANT: 69, Category.PROTECTED: 61},
+#         200: {Category.ONLY_CHILD: 83, Category.DOMINANT: 69, Category.PROTECTED: 61},
+#         225: {Category.ONLY_CHILD: 83, Category.DOMINANT: 69, Category.PROTECTED: 58},
+#         250: {Category.ONLY_CHILD: 78, Category.DOMINANT: 69, Category.PROTECTED: 41},
+#         275: {Category.ONLY_CHILD: 78, Category.DOMINANT: 69, Category.PROTECTED: 41},
+#         300: {Category.ONLY_CHILD: 76, Category.DOMINANT: 69, Category.PROTECTED: 41},
+#         325: {Category.ONLY_CHILD: 76, Category.DOMINANT: 69, Category.PROTECTED: 39},
+#         350: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         375: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         400: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         425: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         450: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         475: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         500: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         525: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         550: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         575: {Category.ONLY_CHILD: 53, Category.DOMINANT: 62, Category.PROTECTED: 39},
+#         600: {Category.ONLY_CHILD: 53, Category.DOMINANT: 61, Category.PROTECTED: 39},
+#     },
+#     "max": {
+#         50: {Category.ONLY_CHILD: 88, Category.DOMINANT: 77, Category.PROTECTED: 72},
+#         75: {Category.ONLY_CHILD: 88, Category.DOMINANT: 74, Category.PROTECTED: 72},
+#         100: {Category.ONLY_CHILD: 88, Category.DOMINANT: 74, Category.PROTECTED: 72},
+#         125: {Category.ONLY_CHILD: 88, Category.DOMINANT: 66, Category.PROTECTED: 63},
+#         150: {Category.ONLY_CHILD: 88, Category.DOMINANT: 66, Category.PROTECTED: 63},
+#         175: {Category.ONLY_CHILD: 78, Category.DOMINANT: 66, Category.PROTECTED: 62},
+#         200: {Category.ONLY_CHILD: 78, Category.DOMINANT: 66, Category.PROTECTED: 61},
+#         225: {Category.ONLY_CHILD: 78, Category.DOMINANT: 65, Category.PROTECTED: 58},
+#         250: {Category.ONLY_CHILD: 76, Category.DOMINANT: 65, Category.PROTECTED: 54},
+#         275: {Category.ONLY_CHILD: 76, Category.DOMINANT: 65, Category.PROTECTED: 51},
+#         300: {Category.ONLY_CHILD: 76, Category.DOMINANT: 63, Category.PROTECTED: 51},
+#         325: {Category.ONLY_CHILD: 76, Category.DOMINANT: 63, Category.PROTECTED: 51},
+#         350: {Category.ONLY_CHILD: 75, Category.DOMINANT: 63, Category.PROTECTED: 51},
+#         375: {Category.ONLY_CHILD: 75, Category.DOMINANT: 49, Category.PROTECTED: 49},
+#         400: {Category.ONLY_CHILD: 75, Category.DOMINANT: 49, Category.PROTECTED: 49},
+#         425: {Category.ONLY_CHILD: 75, Category.DOMINANT: 49, Category.PROTECTED: 49},
+#         450: {Category.ONLY_CHILD: 75, Category.DOMINANT: 49, Category.PROTECTED: 49},
+#         475: {Category.ONLY_CHILD: 58, Category.DOMINANT: 49, Category.PROTECTED: 39},
+#         500: {Category.ONLY_CHILD: 58, Category.DOMINANT: 37, Category.PROTECTED: 39},
+#         525: {Category.ONLY_CHILD: 58, Category.DOMINANT: 37, Category.PROTECTED: 39},
+#         550: {Category.ONLY_CHILD: 57, Category.DOMINANT: 37, Category.PROTECTED: 39},
+#         575: {Category.ONLY_CHILD: 53, Category.DOMINANT: 37, Category.PROTECTED: 29},
+#         600: {Category.ONLY_CHILD: 53, Category.DOMINANT: 37, Category.PROTECTED: 29},
+#     },
+# }
 
 
 def assign_terminal_categories(G: PyDiGraph, families: dict[int, list[int]]) -> None:

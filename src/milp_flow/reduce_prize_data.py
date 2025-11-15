@@ -48,19 +48,8 @@ def apply_top_n_filtering(solver_graph: PyDiGraph, data: dict[str, Any]):
     for t_idx in solver_graph.attrs["terminal_indices"]:
         prizes = solver_graph[t_idx]["prizes"]
 
-        # Sort by Raw Value
-        prizes = sorted(prizes.items(), key=lambda item: item[1], reverse=True)
-        solver_graph[t_idx]["prizes"] = dict(prizes[:top_n])
-
-        # Remove entries from tr_data for all entries beyond top_n
-        tr_data = solver_graph.attrs["terminal_root_prizes"]
-        for entry in prizes[top_n:]:
-            tr_data.pop((t_idx, entry[0]))
-
-        # Sort by VPC = value / path_cost
-        # prizes = sorted(
-        #     prizes.items(), key=lambda item: item[1] / all_pairs.get((t_idx, item[0])), reverse=True
-        # )
+        # # Sort by Raw Value - this captures the optimal (albeit not as fast as VPC)
+        # prizes = sorted(prizes.items(), key=lambda item: item[1], reverse=True)
         # solver_graph[t_idx]["prizes"] = dict(prizes[:top_n])
 
         # # Remove entries from tr_data for all entries beyond top_n
@@ -68,21 +57,31 @@ def apply_top_n_filtering(solver_graph: PyDiGraph, data: dict[str, Any]):
         # for entry in prizes[top_n:]:
         #     tr_data.pop((t_idx, entry[0]))
 
-        # # Union of both sort approaches
-        # raw_sorted = sorted(prizes.items(), key=lambda item: item[1], reverse=True)
-        # vpc_sorted = sorted(
-        #     prizes.items(), key=lambda item: item[1] / all_pairs.get((t_idx, item[0])), reverse=True
-        # )
-        # raw_top = set(r for r, _ in raw_sorted[:top_n])
-        # vpc_top = set(r for r, _ in vpc_sorted[:top_n])
-        # union_top = raw_top.union(vpc_top)
-        # solver_graph[t_idx]["prizes"] = {r: prizes[r] for r in union_top}
+        # # Sort by VPC => value / path_cost - this captures the optimal
+        # prizes = sorted(prizes.items(), key=lambda item: item[1] / all_pairs[(t_idx, item[0])], reverse=True)
+        # solver_graph[t_idx]["prizes"] = dict(prizes[:top_n])
 
         # # Remove entries from tr_data for all entries beyond top_n
         # tr_data = solver_graph.attrs["terminal_root_prizes"]
-        # for r in prizes:
-        #     if r not in union_top:
-        #         tr_data.pop((t_idx, r))
+        # for entry in prizes[top_n:]:
+        #     tr_data.pop((t_idx, entry[0]))
+
+        # Union of both sort approaches
+        raw_sorted = sorted(prizes.items(), key=lambda item: item[1], reverse=True)
+        vpc_sorted = sorted(
+            prizes.items(), key=lambda item: item[1] / all_pairs.get((t_idx, item[0])), reverse=True
+        )
+        raw_top = set(r for r, _ in raw_sorted[:top_n])
+        vpc_top = set(r for r, _ in vpc_sorted[:top_n])
+        union_top = raw_top.union(vpc_top)
+
+        solver_graph[t_idx]["prizes"] = {r: prizes[r] for r in union_top}
+
+        # Remove entries from tr_data for all entries beyond top_n
+        tr_data = solver_graph.attrs["terminal_root_prizes"]
+        for r in prizes:
+            if r not in union_top:
+                tr_data.pop((t_idx, r))
 
     ending_prize_count = len(solver_graph.attrs["terminal_root_prizes"])
 
@@ -101,11 +100,18 @@ def apply_global_rank_prize_filtering(solver_graph: PyDiGraph, data: dict[str, A
 
     tr_data = solver_graph.attrs["terminal_root_prizes"]
     global_pct_key = "terminal_prize_net_path_cost_global_pct"
+    # global_pct_key = "terminal_prize_value_global_pct"
     lookup = solver_graph.attrs["pct_thresholds_lookup"]
 
-    only_child_threshold = lookup.get_threshold(budget, capacity_mode, Category.ONLY_CHILD)
-    dominant_threshold = lookup.get_threshold(budget, capacity_mode, Category.DOMINANT)
-    protected_threshold = lookup.get_threshold(budget, capacity_mode, Category.PROTECTED)
+    only_child_threshold = (
+        lookup.get_threshold(budget, capacity_mode, Category.ONLY_CHILD)
+        * lookup.factors[capacity_mode][Category.ONLY_CHILD]
+    )
+    dominant_threshold = (
+        lookup.get_threshold(budget, capacity_mode, Category.DOMINANT)
+        * lookup.factors[capacity_mode][Category.DOMINANT]
+    )
+    # protected_threshold = lookup.get_threshold(budget, capacity_mode, Category.PROTECTED)
 
     # Only_child and dominant prunables
     prunables = []
@@ -116,7 +122,7 @@ def apply_global_rank_prize_filtering(solver_graph: PyDiGraph, data: dict[str, A
 
         if (
             category == Category.ONLY_CHILD
-            and entry[global_pct_key] < only_child_threshold
+            and entry[global_pct_key] < only_child_threshold * 0.75
             or category == Category.DOMINANT
             and entry[global_pct_key] < dominant_threshold
         ):
@@ -136,7 +142,7 @@ def apply_global_rank_prize_filtering(solver_graph: PyDiGraph, data: dict[str, A
             continue
 
         protector_t = solver_graph[t_idx]["protector"]
-        if entry[global_pct_key] > protected_threshold or protector_t in dominant_survivors:
+        if protector_t in dominant_survivors:
             saved += 1
             continue
 
