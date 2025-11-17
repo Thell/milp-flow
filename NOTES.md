@@ -4,7 +4,10 @@
 
 With the current state of the code the 'best' setup is most likely to use
 
-top_n: 10, nearest_n: 10, no basin, and the threshold with budget based decay.
+top_n: 10, nearest_n: 10, ub: 25, no basin, budget based decay thresholds.
+
+(The 'no basin' part is still up for grabs as I switched to using top_n and 
+nearest_n of 10 after noting budget 550 didn't catch optimal with 5, 7, 17.)
 
 The next step will be implmenting a new setup approach for generating the graph
 data. What I'm thinking is:

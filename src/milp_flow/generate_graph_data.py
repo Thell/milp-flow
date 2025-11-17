@@ -6,7 +6,6 @@ from typing import Any
 from bidict import bidict
 from loguru import logger
 from rustworkx import PyDiGraph, strongly_connected_components
-from api_exploration_graph import attach_metrics_to_graph
 from api_rx_pydigraph import subgraph_stable
 import terminal_prize_utils as tpu
 
@@ -286,6 +285,5 @@ def generate_graph_data(data: dict[str, Any]):
     setup_node_transit_bounds(G, data)
     setup_prize_rank_data(G, data)
     setup_transit_layers(G, data)
-    # attach_metrics_to_graph(G, config={"use_asp_bc": True, "asp_cutoff": 20})
 
     data["G"] = G

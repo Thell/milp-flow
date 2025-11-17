@@ -116,7 +116,6 @@ def main():
                     "cr_pairs": cr_pairs,
                     "prize_scale": prize_scale,
                     "root_cost": root_cost,
-                    "basin_type": 2,
                 })
 
     # Reproducability while using this specific price file
@@ -191,8 +190,6 @@ def main():
                             },
                             "transit_prune": True,
                             "transit_reduce": True,
-                            "transit_basin_type": 0,
-                            "transit_prune_low_asp": False,
                             "terminal_count_min_limit": floor(terminal_count_max_limit * 0.60),
                             "terminal_count_max_limit": terminal_count_max_limit,
                         }

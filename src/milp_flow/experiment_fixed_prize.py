@@ -34,7 +34,6 @@ def main():
         "capacity_mode": "min",
         "transit_prune": False,
         "transit_reduce": False,
-        "transit_basin_type": 0,
         "budget_equality": "eq",
     }
     solver_config = {

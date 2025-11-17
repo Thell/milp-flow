@@ -268,37 +268,23 @@ def create_model(
             if len(eligible) < 2:
                 continue
 
-            # Cost equality check - since we don't have the transit or capacity costs we can't
-            # handle unequal costs accurately which causes constraint blocking and infeasibility
+            # Cost check - unequal costs causes constraint blocking and infeasibility
             base_cost = G[eligible[0]]["need_exploration_point"]
             if not all(G[t]["need_exploration_point"] == base_cost for t in eligible):
                 continue
 
-            # Consistent keys - reduce the number of constraints requiring branching without tightening
+            # Roots check - unequal roots causes constraint blocking and infeasibility
             sorted_keys = list(G[eligible[0]]["prizes"].keys())
             if not all(list(G[t]["prizes"].keys()) == sorted_keys for t in eligible):
                 continue
 
-            # Chain on raw prize
+            # Allow any root to take the dominant prize unlocking all siblings
+            # (Chaining of siblings is not waranted)
             sorted_ts = sorted(eligible, key=lambda t: int(G[t]["prizes"][r]))
             high = sorted_ts[-1]
             for i in range(len(sorted_ts) - 1):
                 low = sorted_ts[i]
                 model.addConstr(x_t_r[(low, r)] <= x[high])
-
-                # Now that we have the family prize pruning in the preprocessing, we don't need this
-                # if len(eligible) > 2:
-                #     model.addConstr(x_t_r[(low, r)] <= x[sorted_ts[i + 1]])
-
-    # Ranked basins cuts
-    basins = G.attrs.get("basins", {})
-    for r, (basin_ts, cut_value, cut_nodes) in basins.items():
-        outside_assigned = model.qsum(
-            x_t_r[(t, r)] for t in terminal_indices if t not in basin_ts and (t, r) in x_t_r
-        )
-        model.addConstr(
-            outside_assigned <= cut_value * model.qsum(x[b] for b in cut_nodes if b in G.node_indices())
-        )
 
     # Node/flow based constraints: flow from terminals to roots
     flow_roots = roots_indices + ([super_root_index] if super_root_index is not None else [])
