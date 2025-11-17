@@ -105,11 +105,15 @@ def apply_global_rank_prize_filtering(solver_graph: PyDiGraph, data: dict[str, A
 
     only_child_threshold = (
         lookup.get_threshold(budget, capacity_mode, Category.ONLY_CHILD)
-        * lookup.factors[capacity_mode][Category.ONLY_CHILD]
+        * data["config"]["prize_pruning_threshold_factors"][capacity_mode][Category.ONLY_CHILD.value]
     )
     dominant_threshold = (
         lookup.get_threshold(budget, capacity_mode, Category.DOMINANT)
-        * lookup.factors[capacity_mode][Category.DOMINANT]
+        * data["config"]["prize_pruning_threshold_factors"][capacity_mode][Category.DOMINANT.value]
+    )
+    protected_threshold = (
+        lookup.get_threshold(budget, capacity_mode, Category.PROTECTED)
+        * data["config"]["prize_pruning_threshold_factors"][capacity_mode][Category.PROTECTED.value]
     )
     # protected_threshold = lookup.get_threshold(budget, capacity_mode, Category.PROTECTED)
 
@@ -118,11 +122,13 @@ def apply_global_rank_prize_filtering(solver_graph: PyDiGraph, data: dict[str, A
     dominant_survivors = set()
     for entry in tr_data.values():
         t_idx = entry["t_idx"]
+        if not solver_graph.has_node(t_idx):
+            continue
         category = solver_graph[t_idx]["category"]
 
         if (
             category == Category.ONLY_CHILD
-            and entry[global_pct_key] < only_child_threshold * 0.75
+            and entry[global_pct_key] < only_child_threshold  # * 0.70  # 0.70 is ok but 0.75 cut-off optimal
             or category == Category.DOMINANT
             and entry[global_pct_key] < dominant_threshold
         ):
@@ -137,12 +143,14 @@ def apply_global_rank_prize_filtering(solver_graph: PyDiGraph, data: dict[str, A
     saved = 0
     for entry in tr_data.values():
         t_idx = entry["t_idx"]
+        if not solver_graph.has_node(t_idx):
+            continue
         category = solver_graph[t_idx]["category"]
         if category != Category.PROTECTED:
             continue
 
         protector_t = solver_graph[t_idx]["protector"]
-        if protector_t in dominant_survivors:
+        if protector_t in dominant_survivors and entry[global_pct_key] > protected_threshold:
             saved += 1
             continue
 

@@ -1,5 +1,35 @@
 # Notes
 
+11-16-2025
+
+With the current state of the code the 'best' setup is most likely to use
+
+top_n: 10, nearest_n: 10, no basin, and the threshold with budget based decay.
+
+The next step will be implmenting a new setup approach for generating the graph
+data. What I'm thinking is:
+
+- Calculate the max used (t,r) path length when _all_ nodes are assigned for
+both min capacity and max capacity modes (perhaps per root) after solving with
+the solver and a high enough budget. I estimate a budget ~933 will be what's
+needed, but that should be able to be confirmed using the max terminals
+experiment (all prizes=1) to find the right budget and then do a full solve with
+that budget. Then analyze the solution for the length metric.
+
+- Use the length as a cutoff to create the initial transit layer per root,
+instead of the nearest_n, then prune NTD1 for each layer.
+
+- For each layer: add that layer's root prize to the payload for each terminal
+and that layer's root capacity to the transit bounds of each node in the layer.
+
+- This will create the reference graph with terminals populated for prizes that
+can possibly be used instead of the top_n and transit routes that would possibly
+be utilized instead of nearest_n.
+
+The reductions and prunings would run against that data["G"] -> solver_graph.
+
+
+# Older Notes
 The purpose of this project is to figure out a way to optimize a Node Empire in
 Black Desert Online.
 

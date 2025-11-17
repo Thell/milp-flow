@@ -70,7 +70,7 @@ def inject_super_root(config: dict, G: rx.PyDiGraph, flow_direction: str = "inbo
 
 
 def subgraph_stable(
-    indices: list[int] | set[int], source_graph: rx.PyGraph | rx.PyDiGraph, inclusive: bool = True
+    graph: rx.PyGraph | rx.PyDiGraph, indices: list[int] | set[int], inclusive: bool = True
 ) -> rx.PyGraph | rx.PyDiGraph:
     """Copies ref graph and deletes all nodes not in indices if inclusive is True.
 
@@ -78,7 +78,7 @@ def subgraph_stable(
     the need for node_map. If any nodes are added to this copy those nodes will **NOT**
     have the same indices as they would in ref_graph.
     """
-    dup_graph = source_graph.copy()
+    dup_graph = graph.copy()
     if not inclusive:
         dup_graph.remove_nodes_from(indices)
     else:

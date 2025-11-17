@@ -5,8 +5,9 @@ from typing import Any
 
 from bidict import bidict
 from loguru import logger
-from rustworkx import PyDiGraph
+from rustworkx import PyDiGraph, strongly_connected_components
 from api_exploration_graph import attach_metrics_to_graph
+from api_rx_pydigraph import subgraph_stable
 import terminal_prize_utils as tpu
 
 # DEBUG_ROOTS = [1623, 1785, 1834, 2001]
@@ -180,6 +181,37 @@ def setup_node_transit_bounds(G: PyDiGraph, data: dict[str, Any]):
         )
 
 
+def setup_transit_layers(G: PyDiGraph, data: dict[str, Any]):
+    """Ensures a single connected component for each transit layer."""
+    logger.info("    setting up transit layers...")
+
+    root_indices = G.attrs["root_indices"]
+
+    for root in root_indices:
+        layer_nodes = [i for i in G.node_indices() if root in G[i]["transit_bounds"]]
+        subG = subgraph_stable(G, layer_nodes)
+        assert isinstance(subG, PyDiGraph)
+        cc = strongly_connected_components(subG)
+        if len(cc) == 1:
+            continue
+
+        root_cc = [i for i, c in enumerate(cc) if root in c][0]
+        for i, c in enumerate(cc):
+            if i == root_cc:
+                continue
+            for j in c:
+                G[j]["transit_bounds"].pop(root)
+                if subG[j]["is_terminal"]:
+                    G[j]["prizes"].pop(root, None)
+
+        # Rebuild the subgraph
+        layer_nodes = [i for i in G.node_indices() if root in G[i]["transit_bounds"]]
+        subG = subgraph_stable(G, layer_nodes)
+        assert isinstance(subG, PyDiGraph)
+        cc = strongly_connected_components(subG)
+        assert len(cc) == 1
+
+
 def setup_prize_rank_data(G: PyDiGraph, data: dict[str, Any]):
     logger.info("    setting up global terminal families...")
     families = tpu.get_terminal_families(G)
@@ -253,6 +285,7 @@ def generate_graph_data(data: dict[str, Any]):
     setup_roots(G, data)
     setup_node_transit_bounds(G, data)
     setup_prize_rank_data(G, data)
-    attach_metrics_to_graph(G, config={"use_asp_bc": True, "asp_cutoff": 20})
+    setup_transit_layers(G, data)
+    # attach_metrics_to_graph(G, config={"use_asp_bc": True, "asp_cutoff": 20})
 
     data["G"] = G

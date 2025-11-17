@@ -49,7 +49,7 @@ def analyze_used_centrality(
         node_key_by_index.inv[node] for node in solution_waypoints if node in node_key_by_index.inv
     ])
 
-    solution_subG = subgraph_stable(list(solution_indices), solver_graph)
+    solution_subG = subgraph_stable(solver_graph, solution_indices)
 
     used_data = []
     skipped_zero = 0

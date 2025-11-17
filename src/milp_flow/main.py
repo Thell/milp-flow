@@ -124,7 +124,7 @@ def main():
     seed(r"src\milp_flow\data\en_lta_prices.json")
 
     budgets = range(50, 625, 25)
-    SKIP_TO = (550, 1, 8, False, False, True, False)
+    SKIP_TO = (50, 1, 8, False, False, True, False)
     FOUND = False
     break_out = False
     data = {}
@@ -174,24 +174,27 @@ def main():
                             + 2.98921916296481e-7 * budget**3
                             - 0.000503850929485882 * budget**2
                         )
+                        prize_t = 1 - (budget * 0.0005)
                         config: dict = {
                             "name": "Empire",
                             "budget": budget,
                             "top_n": 10,
                             "nearest_n": 10,
                             "max_waypoint_ub": 25,
-                            "prune_prizes": True,  # This currently discards optimal solution on budgets >= 550 even with .5 threshold
+                            # NOTE: prune_prizes together with transit_prune drops optimal solution for Budget 550 min capacity
+                            # when only_child is >= 0.75, ok at 0.7375
                             "capacity_mode": "min",
+                            "prune_prizes": True,
+                            "prize_pruning_threshold_factors": {
+                                "min": {"only_child": prize_t, "dominant": prize_t, "protected": prize_t},
+                                "max": {"only_child": 1, "dominant": 1, "protected": 1},
+                            },
                             "transit_prune": True,
                             "transit_reduce": True,
-                            "transit_basin_type": 2,
+                            "transit_basin_type": 0,
                             "transit_prune_low_asp": False,
                             "terminal_count_min_limit": floor(terminal_count_max_limit * 0.60),
                             "terminal_count_max_limit": terminal_count_max_limit,
-                            "prize_pruning_threshold_factors": {
-                                "min": {"only_child": 0.5, "dominant": 0.5, "protected": 0.5},
-                                "max": {"only_child": 0.5, "dominant": 0.5, "protected": 0.5},
-                            },
                         }
                         solver_config = {
                             # "highs_analysis_level": 128,

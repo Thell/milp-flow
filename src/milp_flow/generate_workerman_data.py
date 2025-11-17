@@ -66,7 +66,7 @@ def generate_graph(G: PyDiGraph, model: Highs, vars: dict):
         for i, x_var in vars["x"].items()
         if int(round(model.variableValue(x_var))) == 1  # type: ignore
     ]
-    subG = subgraph_stable(active_graph_indices, G)
+    subG = subgraph_stable(G, active_graph_indices)
     used_active_nodes = set()
     for terminal, root in terminal_sets.items():
         # Since the HiGHs solution is a tree we can just use hops of 1.
