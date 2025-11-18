@@ -27,23 +27,23 @@ def main():
     config: dict = {
         "name": "Empire",
         "budget": 25,
-        "top_n": 6,
-        "nearest_n": 7,
-        "max_waypoint_ub": 17,
+        "top_n": 20,
+        "nearest_n": 20,
+        "max_waypoint_ub": 50,
         "prune_prizes": False,
         "capacity_mode": "min",
-        "transit_prune": False,
+        "transit_prune": True,
         "transit_reduce": False,
-        "budget_equality": "eq",
     }
     solver_config = {
         "log_to_console": True,
         "mip_heuristic_run_root_reduced_cost": False,
         "mip_min_logging_interval": 60,
-        "mip_share_incumbent_solution": False,
+        "mip_share_incumbent_solution": True,
         "num_processes": 1,
         "random_seed": 0,  # set to 0 for internal HiGHS seed and seed + i for concurrent HiGHS instances
         "threads": 8,  # HiGHS internal threads
+        "time_limit": 3600 * 8,
     }
     config["solver"] = solver_config
 
@@ -68,13 +68,23 @@ def main():
         step = 25
         prev_terminal_count = 0
 
-        for budget in range(50, 626, step):
+        for budget in [2000]:  # range(1174, 1175, step):
             highs_seed = randint(0, 2**31 - 1)  # HiGHS ranges from 0 to 2^31 - 1
             config["solver"]["random_seed"] = highs_seed
             config["budget"] = budget
-            # Do half of the step when budget > 200 for max capacity
-            config["terminal_count_min_limit"] = 0  # use prev_terminal_count for max
-            config["terminal_count_max_limit"] = prev_terminal_count + step
+
+            # Can use half of the step when budget > 200 for max capacity
+            terminal_count_max_limit = round(
+                3.98980981766944
+                + 0.552618716162738 * budget
+                + 2.98921916296481e-7 * budget**3
+                - 0.000503850929485882 * budget**2
+            )
+            prev_terminal_count = (
+                prev_terminal_count if prev_terminal_count > 0 else terminal_count_max_limit - step
+            )
+            config["terminal_count_min_limit"] = None
+            config["terminal_count_max_limit"] = None
 
             lodging_specification = ds.read_json("lodging_specifications.json")[capacity_mode]
             print(f"== Budget: {budget} (highs_seed: {highs_seed}) ==")
@@ -84,10 +94,10 @@ def main():
                     config, prices, modifiers, lodging_specification, grindTakenList
                 )
 
-                # Modify all prizes values to be 1 for max terminals
-                for t, entries in data["plant_values"].items():
-                    for r, entry in entries.items():
-                        entry["value"] = 1
+                # # Modify all prizes values to be 1 for max terminals
+                # for t, entries in data["plant_values"].items():
+                #     for r, entry in entries.items():
+                #         entry["value"] = 1
 
                 generate_graph_data(data)
 
@@ -97,10 +107,8 @@ def main():
             solver_graph.attrs = deepcopy(data["G"].attrs)
             data["solver_graph"] = solver_graph
 
-            if config["prune_prizes"]:
-                reduce_prize_data(data)
-            if config["transit_reduce"]:
-                reduce_transit_data(data)
+            reduce_prize_data(data)
+            reduce_transit_data(data)
 
             model, terminal_sets = optimize(data, cr_pairs=True, prize_scale=False, prev_terminals_sets=None)
 

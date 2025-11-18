@@ -10,7 +10,7 @@ from threading import Lock
 from threading import Thread
 import time
 
-from highspy import Highs, ObjSense
+from highspy import Highs, HighsLinearObjective, ObjSense
 from highspy._core import HighsOptions
 from loguru import logger
 import numpy as np
@@ -148,29 +148,19 @@ def create_model(
     for t in super_terminal_indices:
         x_t_r[(t, super_root_index)] = model.addBinary()
 
-    # # TESTING
-    # # fmt: off
-    # test_waypoints = [1, 21, 22, 24, 42, 45, 48, 131, 132, 135, 136, 144, 160, 183, 184, 301, 302, 305, 309, 322, 323, 324, 327, 341, 344, 345, 347, 372, 435, 436, 438, 439, 440, 443, 455, 464, 476, 480, 488, 601, 602, 608, 609, 624, 628, 633, 638, 651, 652, 654, 656, 660, 662, 664, 667, 668, 670, 672, 674, 675, 703, 705, 706, 707, 708, 710, 712, 715, 716, 717, 718, 720, 721, 722, 723, 726, 840, 842, 852, 853, 854, 901, 902, 903, 905, 907, 908, 910, 912, 913, 914, 951, 952, 958, 1101, 1133, 1138, 1141, 1148, 1149, 1154, 1156, 1158, 1159, 1160, 1161, 1162, 1201, 1203, 1204, 1205, 1206, 1213, 1219, 1220, 1301, 1302, 1303, 1304, 1305, 1306, 1307, 1309, 1310, 1314, 1315, 1318, 1319, 1321, 1325, 1327, 1328, 1329, 1330, 1345, 1346, 1350, 1351, 1352, 1354, 1355, 1379, 1380, 1385, 1387, 1388, 1389, 1501, 1502, 1504, 1505, 1507, 1508, 1510, 1513, 1514, 1515, 1516, 1517, 1521, 1522, 1523, 1527, 1529, 1530, 1531, 1534, 1535, 1536, 1537, 1538, 1554, 1555, 1556, 1558, 1561, 1562, 1565, 1609, 1619, 1621, 1622, 1623, 1625, 1636, 1637, 1642, 1645, 1649, 1654, 1655, 1656, 1657, 1658, 1660, 1663, 1664, 1665, 1666, 1681, 1683, 1684, 1685, 1686, 1687, 1688, 1691, 1695, 1702, 1703, 1710, 1711, 1713, 1716, 1740, 1741, 1742, 1743, 1750, 1755, 1756, 1757, 1759, 1762, 1769, 1770, 1771, 1772, 1778, 1781, 1785, 1788, 1789, 1790, 1792, 1793, 1795, 1796, 1797, 1799, 1807, 1808, 1809, 1813, 1815, 1819, 1820, 1821, 1822, 1823, 1826, 1827, 1828, 1829, 1830, 1834, 1837, 1838, 1840, 1843, 1844, 1845, 1847, 1848, 1849, 1850, 1852, 1853, 1854, 1855, 1857, 1858, 1859, 1860, 1861, 1863, 1864, 1868, 1870, 1874, 1875, 1877, 1878, 1879, 1880, 1881, 1882, 1883, 1884, 1885, 1886, 1887, 1888, 1889, 1890, 1891, 1892, 1893, 1894, 1895, 1896, 1897, 1899, 1902, 1903, 1904, 1906, 1907, 1908, 1909, 1911, 1912, 1913, 2001, 2002, 2004, 2006, 2009, 2014, 2016, 2019, 2020, 2022, 2024, 2025, 2026, 2027, 2028, 2029, 2030, 2034, 2035, 2037, 2038, 2039, 2040, 2044, 2045, 2046, 2047, 2048, 2049]
-    # prev_terminals_sets = {131: 1, 132: 1, 135: 1, 136: 1, 144: 1, 160: 1, 183: 1, 184: 1, 435: 301, 436: 301, 438: 301, 439: 301, 440: 301, 443: 301, 455: 301, 464: 301, 476: 301, 480: 301, 488: 301, 840: 601, 842: 601, 852: 601, 853: 601, 854: 601, 901: 601, 902: 601, 903: 601, 905: 608, 907: 608, 908: 608, 910: 602, 912: 601, 913: 601, 914: 601, 951: 602, 952: 602, 958: 602, 1201: 1141, 1203: 301, 1204: 1141, 1205: 301, 1206: 1141, 1213: 301, 1219: 1141, 1220: 1141, 1501: 1101, 1502: 1101, 1504: 1101, 1505: 1101, 1507: 1101, 1508: 1101, 1510: 1319, 1513: 1319, 1514: 1314, 1515: 1314, 1516: 1314, 1517: 1314, 1521: 1319, 1522: 1319, 1523: 1319, 1527: 1319, 1529: 1314, 1530: 1314, 1531: 1314, 1534: 1301, 1535: 1301, 1536: 1301, 1537: 1301, 1538: 1301, 1554: 1301, 1555: 1380, 1556: 1301, 1558: 1301, 1561: 1301, 1562: 1301, 1565: 1301, 1636: 1623, 1637: 1623, 1642: 1623, 1645: 1623, 1681: 1649, 1683: 302, 1684: 302, 1685: 301, 1686: 301, 1687: 1649, 1688: 1649, 1710: 1691, 1711: 1691, 1713: 1691, 1716: 1691, 1769: 1750, 1770: 1750, 1771: 1750, 1772: 1750, 1778: 1750, 1807: 1781, 1808: 1781, 1809: 1781, 1813: 1795, 1815: 1781, 1819: 1795, 1820: 1795, 1821: 1781, 1822: 1781, 1823: 1785, 1826: 1795, 1827: 1795, 1828: 1795, 1829: 1795, 1830: 1781, 1879: 1857, 1880: 1857, 1881: 1857, 1882: 1853, 1883: 1853, 1884: 1853, 1885: 1853, 1886: 1857, 1887: 1853, 1888: 1853, 1889: 1857, 1890: 1853, 1891: 1858, 1892: 1858, 1893: 1858, 1894: 1853, 1895: 1853, 1896: 1853, 1897: 1853, 1899: 1834, 1902: 1843, 1903: 1843, 1904: 1834, 1906: 1843, 1907: 1843, 1908: 1843, 1909: 1843, 1911: 602, 1912: 602, 1913: 602, 2037: 2001, 2038: 2001, 2039: 2001, 2040: 2001, 2044: 2001, 2045: 2001, 2046: 2001, 2047: 2001, 2048: 2001, 2049: 2001}
-    # node_key_by_index = G.attrs["node_key_by_index"]
-    # # fmt: on
-
-    # for waypoint in test_waypoints:
-    #     waypoint_index = node_key_by_index.inv[waypoint]
-    #     model.addConstr(x[waypoint_index] == 1)
-
     # # Iterative optimization by forcing assignment from a given set of (terminal, root) pairs
-    # expected_value = 0
-    # if prev_terminals_sets:
-    #     logger.warning("using prev_model")
-    #     for t, r in prev_terminals_sets.items():
-    #         t_index = node_key_by_index.inv[t]
-    #         r_index = node_key_by_index.inv[r]
-    #         model.addConstr(x_t_r[(t_index, r_index)] == 1)
-    #         model.addConstr(x[t_index] == 1)
-    #         model.addConstr(x[r_index] == 1)
-    #         expected_value += G[t_index]["prizes"][r_index]
-    #     logger.warning(f"expected value = {expected_value}")
+    expected_value = 0
+    if prev_terminals_sets:
+        logger.warning("using prev_model")
+        node_key_by_index = G.attrs["node_key_by_index"]
+        for t, r in prev_terminals_sets.items():
+            t_index = node_key_by_index.inv[t]
+            r_index = node_key_by_index.inv[r]
+            model.addConstr(x_t_r[(t_index, r_index)] == 1)
+            model.addConstr(x[t_index] == 1)
+            model.addConstr(x[r_index] == 1)
+            expected_value += G[t_index]["prizes"][r_index]
+        logger.warning(f"expected value = {expected_value}")
 
     # SOS1 - Capacity assignment selector for each root
     # Capacity has step-wise costs and must equal the terminal count assigned to the root.
@@ -196,36 +186,65 @@ def create_model(
             ub = min(G[i]["transit_bounds"][r], G[j]["transit_bounds"][r])
             f_r[(r, i, j)] = model.addVariable(lb=0, ub=ub)
 
-    # Objective
-    if prize_scale:
-        prizes = model.qsum(
-            x_t_r[(t, r)] * (int(prize) / 1e6)
-            for t in terminal_indices
-            for r, prize in G[t]["prizes"].items()
-        )
-    else:
-        prizes = model.qsum(
-            x_t_r[(t, r)] * prize for t in terminal_indices for r, prize in G[t]["prizes"].items()
-        )
-    model.setObjective(prizes, sense=ObjSense.kMaximize)
+    # # Single-Objective
+    # if prize_scale:
+    #     prizes = model.qsum(
+    #         x_t_r[(t, r)] * (int(prize) / 1e6)
+    #         for t in terminal_indices
+    #         for r, prize in G[t]["prizes"].items()
+    #     )
+    # else:
+    #     prizes = model.qsum(
+    #         x_t_r[(t, r)] * prize for t in terminal_indices for r, prize in G[t]["prizes"].items()
+    #     )
+    # model.setObjective(prizes, sense=ObjSense.kMaximize)
+
+    # Muli-Objectives
+    model.setOptionValue("blend_multi_objectives", False)
+    num_col = model.getNumCol()  # AFTER all variables are added
+
+    # Maximize Profit (prizes)
+    profit_coeffs = [0.0] * num_col
+    for t in terminal_indices:
+        for r, prize in G[t]["prizes"].items():
+            col_idx = x_t_r[(t, r)].index
+            profit_coeffs[col_idx] = int(prize) / 1e6 if prize_scale else prize
+    profit_obj = HighsLinearObjective()
+    profit_obj.weight = -1.0  # maximize
+    profit_obj.offset = 0.0
+    profit_obj.coefficients = profit_coeffs
+    profit_obj.abs_tolerance = 0.0001
+    profit_obj.rel_tolerance = 0.0001
+    profit_obj.priority = 1
+    print("Max x_t_r index:", max(v.index for v in x_t_r.values()))
+    print("Num columns:", model.getNumCol())
+    print("Some sample coefficients:", profit_coeffs[:10])
+    model.addLinearObjective(profit_obj)
+
+    # Minimize Transit Cost (non capacity cost, non terminal, non root, non super_terminal)
+    # Node selection cost
+    cost_coeffs = [0.0] * num_col
+    non_transit_indices = set(roots_indices + terminal_indices + super_terminal_indices)
+    for i in G.node_indices():
+        if i not in non_transit_indices:
+            col_idx = x[i].index  # type: ignore
+            cost_coeffs[col_idx] = G[i]["need_exploration_point"]
+
+    cost_obj = HighsLinearObjective()
+    cost_obj.weight = 1.0  # minimize
+    cost_obj.offset = 0.0
+    cost_obj.coefficients = cost_coeffs
+    cost_obj.abs_tolerance = 0.0
+    cost_obj.rel_tolerance = 0.0
+    cost_obj.priority = 0
+    model.addLinearObjective(cost_obj)
 
     # Max cost budget constraint
     capacity_cost = model.qsum(
         c_r[(c, r)] * cost for r in roots_indices for c, cost in enumerate(G[r]["capacity_cost"])
     )
     node_cost = model.qsum(x[i] * G[i]["need_exploration_point"] for i in G.node_indices())
-    budget = config["budget"]
-    budget_equality = config.get("budget_equality", None)
-    if budget_equality is not None:
-        if budget_equality == "eq":
-            logger.info("*** setting strict budget_equality")
-            model.addConstr(capacity_cost + node_cost == budget, name="budget")
-        else:
-            logger.info("*** setting budget_equality to 'at most'")
-            model.addConstr(capacity_cost + node_cost <= budget, name="budget")
-    else:
-        logger.info("*** setting budget_equality to 'at most'")
-        model.addConstr(capacity_cost + node_cost <= budget, name="budget")
+    model.addConstr(capacity_cost + node_cost <= config["budget"], name="budget")
 
     # Minimum and Maximum upper bound on number of terminals constraint
     t_count_lb = config["terminal_count_min_limit"]
@@ -248,7 +267,7 @@ def create_model(
         model.addConstr(x[t] >= assigned)
         # Terminals may be assigned to at most a single root
         model.addConstr(assigned <= 1)
-        # Terminals must not be selected if not assigned
+        # Terminals may not be selected if not assigned
         model.addConstr(x[t] <= assigned)
 
     # (Super Terminal, Super Root) assignment constraints
