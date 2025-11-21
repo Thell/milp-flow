@@ -163,3 +163,6 @@ cython_debug/
 
 output/*
 zzz_out_new/*
+
+# maptiles are almost never updated
+src/milp_flow/data/maptiles*
