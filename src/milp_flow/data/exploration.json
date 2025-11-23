@@ -16933,7 +16933,7 @@
         "is_warehouse_town": false,
         "is_worker_npc_town": false,
         "need_exploration_point": 1,
-        "position": {"x": -1304260.0, "y": -8150.0, "z": 1565370.0},
+        "position": {"x": -16560.0, "y": 38058.1015625, "z": -427503.0},
         "link_list": [1649],
         "worker_types": [],
         "region_houseinfo": {

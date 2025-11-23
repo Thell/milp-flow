@@ -15,6 +15,8 @@ GREAT_OCEAN_TERRITORY = 5
 OQUILLAS_EYE_KEY = 1727
 SUPER_ROOT = 99999
 
+TILE_SCALE = 12800
+
 
 class ResultDict(TypedDict):
     solution_graph: rx.PyDiGraph

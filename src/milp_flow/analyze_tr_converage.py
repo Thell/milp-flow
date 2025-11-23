@@ -11,14 +11,17 @@ from typing import Any
 
 import alphashape
 from loguru import logger
-import numpy as np
 import pandas as pd
-from rustworkx import PyDiGraph
 import rustworkx as rx
-from shapely import Point
+from rustworkx import PyDiGraph, weakly_connected_components
 
 from api_common import set_logger
-from api_exploration_graph import has_edge_weights, populate_edge_weights
+from api_exploration_graph import (
+    get_all_pairs_shortest_paths,
+    has_edge_weights,
+    populate_edge_weights,
+    add_scaled_coords_to_graph,
+)
 from api_rx_pydigraph import subgraph_stable
 from generate_graph_data import generate_graph_data
 from generate_reference_data import generate_reference_data
@@ -27,39 +30,103 @@ import data_store as ds
 from api_common import OQUILLAS_EYE_KEY
 
 
-def get_cartesian(G: PyDiGraph, idx: int) -> tuple[float, float]:
-    p = G[idx]["position"]
-    return (float(p["x"]), float(p["z"]))
+def find_hull_based_frontier(G, settlement: set[int], frontier: set[int]) -> set[int]:
+    nodes = settlement | frontier
+    if len(nodes) < 3:
+        return set()
+
+    hull = alphashape.alphashape(G.attrs["scaled_coords"](nodes), G.attrs["alpha"])
+    if hull.is_empty:  # type: ignore
+        return set()
+    hull = hull.buffer(0.5)  # type: ignore
+
+    covered_mask = hull.covers(G.attrs["scaled_points"](G.node_indices()))
+    covered_indices = G.attrs["node_indices_array"][covered_mask]
+
+    return set(covered_indices) - settlement
 
 
-def get_hull(G: PyDiGraph, settlement: set[int], alpha=0.25):
-    if len(settlement) < 3:
-        return None
-    coords = [get_cartesian(G, idx) for idx in settlement]
-    try:
-        hull = alphashape.alphashape(coords, alpha)  # type: ignore
-        return hull.buffer(0.5)  # type: ignore
-    except Exception as e:
-        logger.warning(f"Hull failed: {e}")
-        return None
+def get_new_shortest_paths_nodes(
+    G: PyDiGraph,
+    settled_terminals: set[int],
+    frontier: set[int],
+    root: int,
+) -> set[int]:
+    # Root to frontier terminals
+    path_nodes = set()
+    frontier_terminals = set()
+    for i in frontier:
+        if G[i]["is_terminal"]:
+            frontier_terminals.add(i)
+            path_nodes.update(G.attrs["shortest_paths"][(root, i)])
+
+    # Inter-terminal
+    # all_terminals = list(settled_terminals | frontier_terminals)
+    all_terminals = list(frontier_terminals)
+    for u in all_terminals:
+        for v in all_terminals:
+            if u >= v:
+                continue
+            if u in settled_terminals and v in settled_terminals:
+                continue
+            path_nodes.update(G.attrs["shortest_paths"][(u, v)])
+
+    return path_nodes
 
 
-def get_hull_covered_settlement(G: PyDiGraph, settlement: set[int], hull) -> bool:
-    """Updates settlement in place with nodes covered by hull.
-    Returns true if any new nodes covered by hull have been settled.
-    """
-    if hull is None:
-        return False
-    new_settlement = settlement.copy()
-    new_settlement.update({
-        idx
-        for idx in G.node_indices()
-        if idx not in settlement and hull.covers(Point(*get_cartesian(G, idx)))
-    })
-    if len(new_settlement) == len(settlement):
-        return False
-    settlement.update(new_settlement)
-    return True
+def extract_parents(families: dict[int, set[int]], nodes: set[int]):
+    return {i for i in nodes if i in families}
+
+
+def expand_frontier_via_hull(
+    G: PyDiGraph,
+    data: dict[str, Any],
+    root: int,
+    frontier: set[int],
+    settlement: set[int],
+    settled_terminals: set[int],
+):
+    """Expands frontier until hull + inter-terminal connectivity stabalizes."""
+    families = data["families"]
+
+    # Frontier most likely consists of the parents of newly settled terminals
+    # but not the terminals themselves.
+    terminal_parents = extract_parents(families, frontier)
+    terminals_to_settle = set()
+    for parent in terminal_parents:
+        terminals_to_settle.update(families[parent])
+    # frontier.update(terminals_to_settle)
+
+    # new_path_nodes = get_new_shortest_paths_nodes(G, settled_terminals, frontier, root)
+    new_path_nodes = get_new_shortest_paths_nodes(G, terminal_parents, frontier, root)
+    frontier.update(new_path_nodes)
+    frontier = frontier.difference(settlement)
+
+    # settle until hull + inter-terminal connectivity stabalizes
+    while True:
+        hull_frontier = find_hull_based_frontier(G, settlement, frontier)
+        if hull_frontier == frontier:
+            break
+
+        terminal_parents = extract_parents(families, hull_frontier - frontier)
+        if not terminal_parents:
+            break
+        frontier.update(hull_frontier)
+
+        # terminals_to_settle = set()
+        for parent in terminal_parents:
+            terminals_to_settle.update(families[parent])
+        # frontier.update(terminals_to_settle)
+
+        new_path_nodes = get_new_shortest_paths_nodes(G, settled_terminals, frontier, root)
+        frontier.update(new_path_nodes)
+
+    frontier.update(terminals_to_settle)
+    return frontier
+
+
+def weight_fn(e):
+    return e["need_exploration_point"]
 
 
 def find_frontier_nodes(G: PyDiGraph, settlement: set[int]) -> set[int]:
@@ -71,48 +138,37 @@ def find_frontier_nodes(G: PyDiGraph, settlement: set[int]) -> set[int]:
     return frontier
 
 
-def expand_frontier_to_new_terminals(G: PyDiGraph, settlement: set[int], terminals: set[int]) -> set[int]:
-    """Expands frontier until new terminals are found.
-    Returns previously frontier nodes that are now settled.
+def expand_frontier_to_new_terminals(G: PyDiGraph, data: dict[str, Any], settlement: set[int]) -> set[int]:
+    """Expands frontier until parents of new terminals are found.
+    Returns the set of newly settled nodes.
     """
-    wild_frontier_terminals = terminals - settlement
-    new_settlement = settlement.copy()
-    new_frontier = find_frontier_nodes(G, new_settlement)
-    while not new_frontier.intersection(wild_frontier_terminals):
-        new_settlement.update(new_frontier)
-        new_frontier = find_frontier_nodes(G, new_settlement)
-    new_settlement.update(new_frontier)
-    new_settlement.difference_update(settlement)
+    orig_settlement = set(settlement)
+    frontier = set()
+    families = data["families"]
 
-    return new_settlement
+    frontier_nodes = find_frontier_nodes(G, orig_settlement)
+    while frontier_nodes and not any(i in families for i in frontier_nodes):
+        frontier.update(frontier_nodes)
+        orig_settlement.update(frontier_nodes)
+        frontier_nodes = find_frontier_nodes(G, orig_settlement)
+    frontier.update(frontier_nodes)
 
-
-def ensure_all_inter_terminal_paths_are_covered(
-    G: PyDiGraph, settlement: set[int], settled_terminals: set[int], newly_settled_terminals: set[int]
-):
-    """Adds any shortest path nodes between root, settled terminals and newly settled terminals to settlement.
-    Returns true if any new nodes were added and hull needs to be updated.
-    """
-    new_settlement = settlement.copy()
-    for terminal in newly_settled_terminals:
-        for s_terminal in settled_terminals | newly_settled_terminals:
-            if s_terminal == terminal:
-                continue
-            path = rx.dijkstra_shortest_paths(
-                G, s_terminal, terminal, weight_fn=lambda e: e["need_exploration_point"]
-            )
-            new_settlement.update(path[terminal])
-    if new_settlement != settlement:
-        settlement.update(new_settlement)
-        return True
-    return False
+    return frontier
 
 
 def prune_NTD1(graph: PyDiGraph, non_removables: set[int] | None = None):
     """Prunes non terminal nodes of degree 1."""
     if non_removables is None:
-        non_removables = set(graph.attrs.get("root_indices", []))
-        non_removables.update(set(graph.attrs.get("terminal_indices", [])))
+        non_removables = set(
+            graph.attrs.get("root_indices", [i for i in graph.node_indices() if graph[i]["is_town"]])
+        )
+        non_removables.update(
+            set(
+                graph.attrs.get(
+                    "terminal_indices", [i for i in graph.node_indices() if graph[i]["is_terminal"]]
+                )
+            )
+        )
         if graph.attrs.get("super_root_index", None) is not None:
             non_removables.add(graph.attrs["super_root_index"])
             non_removables.update(set(graph.attrs.get("super_terminal_indices", [])))
@@ -128,67 +184,47 @@ def prune_NTD1(graph: PyDiGraph, non_removables: set[int] | None = None):
     return num_removed
 
 
-def get_root_connected_subset(graph: PyDiGraph, root: int, settlement: set[int]):
+def get_root_connected_subgraph(graph: PyDiGraph, root: int, settlement: set[int]):
     """Prunes disconnected nodes from settlement returning the set of remaining nodes."""
-    new_settlement = settlement.copy()
-    subG = subgraph_stable(graph, new_settlement)
-    for v in settlement:
-        if not rx.has_path(subG, root, v):
-            new_settlement.remove(v)
-    return new_settlement
+    subG = subgraph_stable(graph, settlement)
+    assert isinstance(subG, PyDiGraph)
+    components = weakly_connected_components(subG)
+    if len(components) == 1:
+        return subG
+
+    root_component = [i for i, c in enumerate(components) if root in c][0]
+    return subgraph_stable(subG, components[root_component])
 
 
-def generate_root_coverage_ring_subgraphs(G: PyDiGraph, root: int, terminals: set[int], alpha=0.25):
+def generate_root_coverage_ring_subgraphs(G: PyDiGraph, data: dict[str, Any], root: int, terminals: set[int]):
     """Generates root coverage rings for a given graph, root and set of terminals."""
     # NOTE: Starting at root build eccentric rings by expanding frontier until no new terminals are found
-    # each ring consists of the next layer of nodes to be settled for each row of the dataframe.
-    rings = []
+    # each ring consists of the previous ring's nodes and newly settled nodes for a row of the dataframe.
+    ring_subgraphs = []
     remaining_terminals = set(terminals)
     settlement = {root}
     settled_terminals = set()
 
     while remaining_terminals:
-        newly_settled_nodes = expand_frontier_to_new_terminals(G, settlement, remaining_terminals)
-        if not newly_settled_nodes:
+        # Frontier nodes are guaranteed to be connected to root, but the
+        # inter-terminal shortest paths may not be yet be covered by the hull...
+        frontier = expand_frontier_to_new_terminals(G, data, settlement)
+        if not frontier:
             break
 
-        settlement.update(newly_settled_nodes)
-        newly_from_frontier = remaining_terminals.intersection(settlement)
-        remaining_terminals.difference_update(newly_from_frontier)
+        # ...so expand frontier until hull + inter-terminal connectivity stabalizes.
+        frontier = expand_frontier_via_hull(G, data, root, frontier, settlement, settled_terminals)
 
-        # settle until hull + inter-terminal connectivity stops changing
-        while True:
-            changed = False
+        newly_settled_terminals = {i for i in frontier if i in remaining_terminals}
+        remaining_terminals.difference_update(newly_settled_terminals)
+        settlement.update(frontier)
+        settled_terminals.update(newly_settled_terminals)
 
-            hull = get_hull(G, settlement, alpha=alpha)
-            if hull is not None:
-                if get_hull_covered_settlement(G, settlement, hull):
-                    changed = True
-
-            newly_from_hull = remaining_terminals.intersection(settlement)
-            if newly_from_hull:
-                remaining_terminals.difference_update(newly_from_hull)
-
-            if ensure_all_inter_terminal_paths_are_covered(
-                G, settlement, settled_terminals, newly_from_frontier | newly_from_hull
-            ):
-                changed = True
-
-            if newly_from_frontier or newly_from_hull:
-                settled_terminals.update(newly_from_frontier)
-                settled_terminals.update(newly_from_hull)
-                newly_from_frontier = set()
-
-            if not changed:
-                break
-
-        rings.append(settlement.copy())
-        settlement = get_root_connected_subset(G, root, settlement)
-
-    ring_subgraphs = [subgraph_stable(G, r) for r in rings]
-    for subgraph in ring_subgraphs:
-        assert isinstance(subgraph, PyDiGraph)
-        prune_NTD1(subgraph)
+        pruned_settlement = get_root_connected_subgraph(G, root, settlement)
+        assert isinstance(pruned_settlement, PyDiGraph)
+        pruned_settlement.attrs = G.attrs
+        prune_NTD1(pruned_settlement)
+        ring_subgraphs.append(pruned_settlement)
 
     return ring_subgraphs
 
@@ -206,10 +242,10 @@ def analyze_ring(
         else set(ring.node_indices())
     )
 
-    terminals_in_ring = [i for i in nodes_in_ring if ring[i]["is_workerman_plantzone"]]
+    terminals_in_ring = [i for i in nodes_in_ring if ring[i]["is_terminal"]]
     terminal_value_in_ring = sum(round(G[i]["prizes"][r_idx] / 1e6, 3) for i in terminals_in_ring)
 
-    terminals_in_hull = [i for i in ring.node_indices() if G[i]["is_workerman_plantzone"]]
+    terminals_in_hull = [i for i in ring.node_indices() if G[i]["is_terminal"]]
     terminal_value_in_hull = sum(round(G[i]["prizes"][r_idx] / 1e6, 3) for i in terminals_in_hull)
 
     ttl_terminal_count = len(terminal_entries)
@@ -259,6 +295,7 @@ def generate_root_df_analysis(ring_analysis: list[dict], bin_count: int = 5):
             "cum_terms": bin_rings[-1]["cum_terminal_count"],
             "sum_prize": sum(r["terminal_value"] for r in bin_rings),
             "cum_prize": bin_rings[-1]["cum_terminal_value"],
+            "hull_nodes": bin_rings[-1]["hull_nodes"],
         }
         total_prize = sum(r["terminal_value"] for r in ring_analysis)
         bin_row["per_%_total_prize"] = (bin_row["sum_prize"] / total_prize * 100) if total_prize else 0.0
@@ -277,34 +314,70 @@ def generate_root_df_analysis(ring_analysis: list[dict], bin_count: int = 5):
         "cum_prize": ring_analysis[-1]["cum_terminal_value"],
         "per_%_total_prize": 100.0,
         "cum_%_total_prize": 100.0,
-        "value_range": f"0.0-100.0",
+        "value_range": "0.0-100.0",
+        "hull_nodes": ring_analysis[-1]["hull_nodes"],
     }
     value_bins = pd.concat([value_bins, pd.DataFrame([full_row])], ignore_index=True)
 
     return value_bins
 
 
+# Simply a helper for figuring out alpha and buffer
+def average_non_terminal_edge_length(G: rx.PyGraph | rx.PyDiGraph) -> float:
+    """
+    Returns the average Euclidean distance of edges where
+    NEITHER endpoint is a terminal node.
+    Uses scaled coordinates (graph.attrs["scaled_coords"]).
+    """
+    if "scaled_coords" not in G.attrs:
+        raise ValueError("Graph missing scaled_coords function")
+
+    scaled = G.attrs["scaled_coords"](G.node_indices())
+    scaled = {idx: p for idx, p in zip(G.node_indices(), scaled)}
+    total_length = 0.0
+    count = 0
+
+    for u, v in G.edge_list():
+        u_node = G[u]
+        v_node = G[v]
+
+        # Skip if either endpoint is a terminal
+        if u_node.get("is_terminal", False) or v_node.get("is_terminal", False):
+            continue
+
+        p1 = scaled[u]
+        p2 = scaled[v]
+        length = ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
+
+        total_length += length
+        count += 1
+
+    return total_length / count if count > 0 else 0.0
+
+
 def run_analysis(config: dict[str, Any], data: dict[str, Any], bin_count: int = 5):
     G = data["G"]
 
-    G.remove_node(G.attrs["node_key_by_index"].inv[OQUILLAS_EYE_KEY])
-    prune_NTD1(G)
-
     terminal_indices = G.attrs["terminal_indices"]
     root_indices = G.attrs["root_indices"]
-    all_pairs_path_lengths = data["all_pairs_path_lengths"]
 
     if not has_edge_weights(G):
         populate_edge_weights(G)
 
+    # avg_len = average_non_terminal_edge_length(G)
+    # logger.info(f"Average internal edge length (non-terminal): {avg_len:.1f} map units")
+
+    import time
+
+    start = time.perf_counter()
+
     all_analysis = {}
-    for r_idx in root_indices[:2]:
+    for r_idx in root_indices:
         terminal_entries = [
             {
                 "t_idx": t,
                 "r_idx": r_idx,
                 "value": round(G[t]["prizes"][r_idx] / 1e6, 3),
-                "dist": all_pairs_path_lengths[(t, r_idx)],
             }
             for t in terminal_indices
             if G[t]["prizes"].get(r_idx) is not None
@@ -317,7 +390,7 @@ def run_analysis(config: dict[str, Any], data: dict[str, Any], bin_count: int = 
         )
 
         ring_subgraphs = generate_root_coverage_ring_subgraphs(
-            G, r_idx, {t["t_idx"] for t in terminal_entries}
+            G, data, r_idx, {t["t_idx"] for t in terminal_entries}
         )
 
         ring_analysis = []
@@ -337,6 +410,9 @@ def run_analysis(config: dict[str, Any], data: dict[str, Any], bin_count: int = 
             "df": df,
             "ring_analysis": ring_analysis,
         }
+
+    end = time.perf_counter()
+    logger.info(f"    analysis took {end - start:.3f} seconds")
 
     return all_analysis
 
@@ -393,22 +469,25 @@ def generate_report(all_analysis, bin_count: int = 5):
             report_data.append({
                 "root": root_key,
                 "ring_index": row["Ring"],
-                "Terminal": row["Terminal"] if "Terminal" in row else row["terminal_count"],
+                "Terminal": row["terminal_count"],
                 "CumTerminal": row["CumTerminal"],
                 "%Term": row["%Term"],
                 "Cum%Term": row["Cum%Term"],
-                "Prize": row["Prize"] if "Prize" in row else row["terminal_value"],
+                "Prize": row["terminal_value"],
                 "CumPrize": row["CumPrize"],
                 "%Prize": row["%Prize"],
                 "Cum%Prize": row["Cum%Prize"],
+                "hull_nodes": str(row["hull_nodes"]),
             })
 
         bin_df = value_bins.copy()
+        # Compute % before rename
         bin_df["%Term"] = bin_df["num_terms"] / total_terminals * 100
         bin_df["Cum%Term"] = bin_df["cum_terms"] / total_terminals * 100
         bin_df["%Prize"] = bin_df["sum_prize"] / total_prize * 100
         bin_df["Cum%Prize"] = bin_df["cum_prize"] / total_prize * 100
 
+        # Single rename at end
         bin_df = bin_df.rename(
             columns={
                 "value_range": "BinRange",
@@ -448,6 +527,7 @@ def generate_report(all_analysis, bin_count: int = 5):
                 "CumPrize": row["CumPrize"],
                 "%Prize": row["%Prize"],
                 "Cum%Prize": row["Cum%Prize"],
+                "hull_nodes": str(row["hull_nodes"]),
             })
 
     report_df = pd.DataFrame(report_data)
@@ -465,6 +545,11 @@ def main(config: dict[str, Any], kwargs: dict[str, Any]):
 
     data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
     generate_graph_data(data)
+    G = data["G"]
+    G.remove_node(G.attrs["node_key_by_index"].inv[OQUILLAS_EYE_KEY])
+    prune_NTD1(G)
+    G.attrs["shortest_paths"] = get_all_pairs_shortest_paths(G)
+    add_scaled_coords_to_graph(G)
 
     all_analysis = run_analysis(config, data, bin_count)
     generate_report(all_analysis, bin_count)
@@ -491,7 +576,7 @@ if __name__ == "__main__":
         "grind_taken_list": [],
         "min_lodging": ds.read_json("lodging_specifications.json")["min"],
         "max_lodging": ds.read_json("lodging_specifications.json")["max"],
-        "bin_count": 10,
+        "bin_count": 20,
     }
 
     main(config, kwargs)

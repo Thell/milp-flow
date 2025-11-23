@@ -3,7 +3,7 @@
 from bidict import bidict
 import rustworkx as rx
 
-from api_common import get_clean_exploration_data
+from api_common import get_clean_exploration_data, TILE_SCALE
 
 
 def exploration_graph_nw(data: dict, directed: bool = False) -> rx.PyGraph | rx.PyDiGraph:
@@ -304,3 +304,43 @@ def get_super_root(config: dict) -> dict:
             "has_cashproduct_storage": False,
         },
     }
+
+
+def add_scaled_coords_to_graph(G) -> None:
+    """Canonical BDO version: uses TILE_SCALE = 12800."""
+    import numpy as np
+    from shapely.geometry import Point
+
+    scale = TILE_SCALE
+
+    for idx in G.node_indices():
+        pos = G[idx]["position"]
+        x, z = float(pos["x"]), float(pos["z"])
+        G[idx]["scaled_coords"] = (x / scale, z / scale)
+
+    def scaled_coord(idx):
+        x, z = G[idx]["scaled_coords"]
+        return (z, x)
+
+    def scaled_coords(idxs):
+        return [G[idx]["scaled_coords"] for idx in idxs]
+
+    def scaled_point(idx):
+        x, z = G[idx]["scaled_coords"]
+        return Point(z, x)
+
+    def scaled_points(idxs):
+        return [scaled_point(idx) for idx in idxs]
+
+    if not G.attrs:
+        G.attrs = {}
+    G.attrs["scale"] = scale
+    G.attrs["alpha"] = 8.4 / scale  # 8.4 is the average non-terminal edge length
+    G.attrs["scaled_coord"] = scaled_coord
+    G.attrs["scaled_coords"] = scaled_coords
+    G.attrs["scaled_point"] = scaled_point
+    G.attrs["scaled_points"] = scaled_points
+
+    node_indices_list = list(G.node_indices())
+    G.attrs["node_indices_array"] = np.array(node_indices_list, dtype=int)
+    G.attrs["node_index_to_pos"] = {idx: i for i, idx in enumerate(node_indices_list)}
