@@ -96,7 +96,7 @@ def analyze_used_prizes(
         category = t_node.get("category", "only_child")
         parents = list(solver_graph.predecessor_indices(t))
         parent = parents[0] if parents else None
-        family_size = len(families.get(parent, [t]))
+        family_size = 1 if parent is None else len(families.get(parent, [t]))
 
         category_counts[category] += 1
         logger.debug(f"{key}: t={t} r={r} parent={parent} family_size={family_size} category={category}")
@@ -289,6 +289,7 @@ if __name__ == "__main__":
             first_non_zero_series = pd.Series(first_non_zero_dict, index=summary.index)
             # Insert after 'Total'
             total_loc = summary.columns.get_loc("Total")
+            assert isinstance(total_loc, int), "Total column not found!"
             summary.insert(total_loc + 1, "first_non_zero_bin", first_non_zero_series)
 
             # Sort by budget, capacity, root, category

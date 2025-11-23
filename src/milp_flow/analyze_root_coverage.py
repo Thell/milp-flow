@@ -1,4 +1,4 @@
-# analyze_tr_converage.py
+# analyze_root_converage.py
 
 """
 - For each root, repeatedly add frontier terminals until all terminals are covered.
@@ -138,7 +138,7 @@ def find_frontier_nodes(G: PyDiGraph, settlement: set[int]) -> set[int]:
     return frontier
 
 
-def expand_frontier_to_new_terminals(G: PyDiGraph, data: dict[str, Any], settlement: set[int]) -> set[int]:
+def expand_frontier_to_new_parents(G: PyDiGraph, data: dict[str, Any], settlement: set[int]) -> set[int]:
     """Expands frontier until parents of new terminals are found.
     Returns the set of newly settled nodes.
     """
@@ -205,10 +205,15 @@ def generate_root_coverage_ring_subgraphs(G: PyDiGraph, data: dict[str, Any], ro
     settlement = {root}
     settled_terminals = set()
 
+    # Do frontier expansion without terminals in the graph and add them later
+    subG = G.copy()
+    subG.attrs = G.attrs
+    subG.remove_nodes_from([i for i in G.node_indices() if G[i]["is_terminal"]])
+
     while remaining_terminals:
         # Frontier nodes are guaranteed to be connected to root, but the
         # inter-terminal shortest paths may not be yet be covered by the hull...
-        frontier = expand_frontier_to_new_terminals(G, data, settlement)
+        frontier = expand_frontier_to_new_parents(subG, data, settlement)
         if not frontier:
             break
 

@@ -104,7 +104,7 @@ def run_analysis(config: dict[str, Any], data: dict[str, Any], bin_count: int = 
                 "dist_range": [f"{min_dist:.1f}-{max_dist:.1f}"],
                 "roots_in_bin": [len(root_indices) - 1],
             },
-            index=[0],
+            index=pd.Index([0]),
         )
         bin_stats = pd.concat([bin_stats, full_row], ignore_index=True)
 

@@ -144,7 +144,8 @@ def optimize_skills(region: int, plantzone: int, dist: float, worker: dict, data
     for i in range(1, max_skills + 1):
         temp_skills = [w["key"] for w in w_skills[:i]]
         new_profit, new_cycles = profit(region, plantzone, dist, worker, temp_skills, data)
-        w_bonuses[i] = {"skills": temp_skills, "profit": new_profit, "cycles": new_cycles}
+        # w_bonuses[i] = {"skills": temp_skills, "profit": new_profit, "cycles": new_cycles}
+        w_bonuses[i] = SkillsValue(skills=temp_skills, profit=new_profit, cycles=new_cycles)
 
         if all(not data["worker_skills"][sk].get("mspd", 0) for sk in temp_skills):
             mod_skills = temp_skills.copy()
@@ -153,7 +154,8 @@ def optimize_skills(region: int, plantzone: int, dist: float, worker: dict, data
                 mod_skills[-1] = wm_skills[0]["key"]
                 mod_profit, mod_cycles = profit(region, plantzone, dist, worker, mod_skills, data)
                 if mod_profit > new_profit:
-                    w_bonuses[i] = {"skills": mod_skills, "profit": mod_profit, "cycles": mod_cycles}
+                    # w_bonuses[i] = {"skills": mod_skills, "profit": mod_profit, "cycles": mod_cycles}
+                    w_bonuses[i] = SkillsValue(skills=mod_skills, profit=mod_profit, cycles=mod_cycles)
 
     ml_actions = ["mspd", "luck"]
     ml_skills = {
