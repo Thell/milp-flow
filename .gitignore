@@ -169,4 +169,6 @@ src/milp_flow/data/maptiles/
 tr_coverage_report.csv
 tr_potential_reach_report.csv
 term_to_root_dist_analysis.csv
-
+solution_used_centrality_by_root_view_summary.csv
+src/milp_flow/data/exploration_all_simple_paths.json
+src/milp_flow/data/graph_all_pairs_all_shortest_paths.json
