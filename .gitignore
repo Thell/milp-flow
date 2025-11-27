@@ -167,3 +167,6 @@ zzz_out_new/*
 # maptiles are almost never updated
 src/milp_flow/data/maptiles/
 tr_coverage_report.csv
+tr_potential_reach_report.csv
+term_to_root_dist_analysis.csv
+
