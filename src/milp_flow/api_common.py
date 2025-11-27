@@ -1,6 +1,6 @@
 # api_common.py
 
-from typing import TypedDict
+from typing import Any, TypedDict
 import sys
 
 from loguru import logger
@@ -84,3 +84,27 @@ def extract_base_empire(G: PyDiGraph, base_empire: dict):
         prev_terminals_sets[t] = r
 
     return prev_terminals_sets
+
+
+def scale_dict_values(d: dict[Any, float], feature_range=(0.01, 1.0)) -> dict[Any, float]:
+    """Scales dict values to a specified feature_range using NumPy."""
+    if not d:
+        return {}
+
+    import numpy as np
+
+    X = np.array(list(d.values()))
+
+    min_old = X.min()
+    max_old = X.max()
+    min_new, max_new = feature_range
+
+    range_old = max_old - min_old
+    if range_old == 0:
+        range_old = 1
+
+    scale_factor = (max_new - min_new) / range_old
+    X_scaled = min_new + (X - min_old) * scale_factor
+
+    X_scaled_dict = dict(zip(d.keys(), X_scaled))
+    return X_scaled_dict

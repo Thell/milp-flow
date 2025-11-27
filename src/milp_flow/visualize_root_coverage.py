@@ -5,247 +5,364 @@ Visualizes root coverage rings on the BDO map using Folium.
 Adapted for value-based ring coverage (cumulative hulls per bin of rings).
 """
 
+import ast
+import colorsys
+from copy import deepcopy
 import os
 import tempfile
+from typing import Any
 import webbrowser
+import re
 
-import distinctipy
 from loguru import logger
+
 import numpy as np
 import pandas as pd
-import rustworkx as rx
-from shapely.geometry import MultiPolygon, Polygon
-import alphashape
-import folium
-from folium import FeatureGroup
+from rustworkx import PyDiGraph
+
+from folium import CircleMarker, FeatureGroup, Map, Marker, PolyLine, TileLayer
+from folium import Polygon as FoliumPolygon
+from folium.map import CustomPane
 from folium.plugins import FeatureGroupSubGroup, GroupedLayerControl, BeautifyIcon
 import matplotlib.colors as mcolors
+from shapely import LineString, Polygon
+from shapely.geometry import MultiPolygon
+from shapely.geometry import MultiLineString
+from shapely.ops import unary_union
 
-from api_common import get_clean_exploration_data, set_logger, SUPER_ROOT
-from api_exploration_graph import add_scaled_coords_to_graph, get_exploration_graph
-from api_rx_pydigraph import inject_super_root, set_graph_terminal_sets_attribute, subgraph_stable
 import data_store as ds
+from api_common import scale_dict_values, set_logger, SUPER_ROOT, OQUILLAS_EYE_KEY
+from api_exploration_graph import (
+    GraphCoords,
+    add_scaled_coords_to_graph,
+    get_all_pairs_all_shortest_paths,
+    get_all_pairs_shortest_paths,
+)
+from api_rx_pydigraph import set_graph_terminal_sets_attribute, subgraph_stable
+from generate_graph_data import generate_graph_data
+from generate_reference_data import generate_reference_data
+from reduce_prize_data import reduce_prize_data
+from reduce_transit_data import prune_NTD1
 
 
-from api_common import TILE_SCALE
-
-ROOT_COLORS = distinctipy.get_colors(46, pastel_factor=0.7)
-MARKER_COLORS = distinctipy.get_colors(46)
-
-# Color Constants
-MAIN_GRAPH_EDGE_COLOR = "darkturquoise"
+# Edge Constants
+MAIN_GRAPH_EDGE_COLOR = "aqua"
 SUBGRAPH_EDGE_COLOR = "yellow"
-REGULAR_NODE_COLOR = "yellow"
-SUPER_ROOT_COLOR = ROOT_COLORS[-1]
 
-# Line Thicknesses
-MAIN_GRAPH_EDGE_WEIGHT = 2
-SUBGRAPH_EDGE_WEIGHT = 3
+MAIN_GRAPH_EDGE_WEIGHT = 1
+SUBGRAPH_EDGE_WEIGHT = 10
 
+# Node Constants
+MAIN_GRAPH_NODE_COLOR = "red"
+SUB_GRAPH_NODE_COLOR = "yellow"
+ROOT_NODE_COLOR = "white"
+SUPER_ROOT_COLOR = "black"
 
-def add_edges_from_graph(
-    fg: folium.FeatureGroup,
-    graph: rx.PyGraph | rx.PyDiGraph,
-    color: str | None = None,
-    weight: float = 0.75,
-):
-    for u_index, v_index in graph.edge_list():
-        if u_index > v_index and not graph.has_edge(v_index, u_index):
-            continue
-
-        u_node = graph[u_index]
-        v_node = graph[v_index]
-        if u_node["waypoint_key"] == 99999 or v_node["waypoint_key"] == 99999:
-            continue
-
-        start = u_node["position"]
-        end = v_node["position"]
-
-        start_lat = start["z"] / TILE_SCALE
-        start_lng = start["x"] / TILE_SCALE
-        end_lat = end["z"] / TILE_SCALE
-        end_lng = end["x"] / TILE_SCALE
-
-        folium.PolyLine(
-            locations=[
-                (start_lat, start_lng),
-                (end_lat, end_lng),
-            ],
-            color=color,
-            weight=weight,
-            opacity=1,
-            popup=f"Edge: {u_node['waypoint_key']} - {v_node['waypoint_key']}",
-            tooltip=f"Edge: {u_node['waypoint_key']} - {v_node['waypoint_key']}",
-            **{"interactive": True, "bubblingMouseEvents": True},
-        ).add_to(fg)
+NODE_CIRCLE_RADIUS = MAIN_GRAPH_EDGE_WEIGHT
+ROOT_CIRCLE_RADIUS = MAIN_GRAPH_EDGE_WEIGHT * 2
+SUB_GRAPH_CIRCLE_RADIUS = MAIN_GRAPH_EDGE_WEIGHT * 2
 
 
-def add_node_markers_from_graph(fg: folium.FeatureGroup, graph: rx.PyGraph | rx.PyDiGraph):
-    base_towns = sorted(node["waypoint_key"] for node in graph.nodes() if node["is_town"])
-    base_town_colors = {waypoint: ROOT_COLORS[i] for i, waypoint in enumerate(base_towns)}
+def get_prize_flow_edge_weights(G: PyDiGraph, data: dict[str, Any]) -> dict[tuple[int, int], float]:
+    """Accumulates prize values for all terminal, root pairs for each family and distributes along
+    the edges of the shortest path(s) from parent to root.
+    """
+    from collections import defaultdict
 
-    for node_idx in graph.node_indices():
-        node = graph[node_idx]
-        node_color = None
-        node_key = node["waypoint_key"]
-        cost = node["need_exploration_point"]
+    all_shortest_paths = G.attrs["all_shortest_paths"]
+    families = data["families"]
 
-        lat = node["position"]["z"] / TILE_SCALE
-        lng = node["position"]["x"] / TILE_SCALE
+    # G can be either the main reference graph or a subset of the main graph.
+    # When subG is passed in as G it is a subset and the attrs still exist from the original G
+    # And when prize pruning is enabled some terminals and terminal prizes may be omitted completely.
+    # So we need to ensure that all nodes for weighted edges are in G.
+    # Roots have cost zero and may be an intermediate node in a different root, terminal path.
 
-        popup_text = f"Node Key: {node_key}, Cost: {cost}"
+    weights = defaultdict(float)
+    for root_idx in (r for r in G.attrs["root_indices"] if G.has_node(r)):
+        for parent_idx in (p for p in families if G.has_node(p)):
+            if root_idx == parent_idx:
+                continue
+            root_value = sum(
+                data["solver_graph"][child]["prizes"].get(root_idx, 0.0) / G[child]["need_exploration_point"]
+                for child in families[parent_idx]
+                if G.has_node(child) and data["solver_graph"].has_node(child)
+            )
+            paths = all_shortest_paths.get((root_idx, parent_idx), [])
+            for path in paths:
+                if not all(G.has_node(u) for u in path):
+                    continue
+                for u, v in zip(path, path[1:]):
+                    weights[u, v] += root_value / max(G[v].get("need_exploration_point"), 1)
+                    if G.has_edge(v, u):
+                        weights[v, u] += root_value / max(G[u].get("need_exploration_point"), 1)
 
-        if node_key == 99999:
+    # The weights of edge_central_betweenness are interpreted as distances, so we need to invert them
+    # such that higher weights indicate higher flow and higher flow indicates higher value
+    global_max_value = max(weights.values())
+    weights = {(u, v): global_max_value - value for (u, v), value in weights.items()}
+
+    return weights
+
+
+def get_scaled_edge_betweenness(
+    G: PyDiGraph,
+    data: dict[str, Any],
+    feature_range: tuple[float, float] = (0.01, 1.0),
+    omit_node_indices: set[int] = set(),
+    weight_type: str | None = None,
+) -> dict[tuple[int, int], float]:
+
+    subG = G.copy()
+    subG.remove_nodes_from(omit_node_indices)
+
+    if weight_type is None:
+        from rustworkx import edge_betweenness_centrality
+
+        ebc = edge_betweenness_centrality(subG, normalized=False)  # unweighted
+        ebc = {subG.get_edge_endpoints_by_index(e): v for e, v in ebc.items()}
+    else:
+        import networkx as nx
+
+        if weight_type == "exploration":
+            weights = {e: subG[e[1]]["need_exploration_point"] for e in subG.edge_list()}
+        elif weight_type == "prize":
+            weights = get_prize_flow_edge_weights(G, data)
+        else:
+            raise ValueError(f"Invalid weight_type: {weight_type}")
+
+        nx_graph = nx.DiGraph()
+        nx_graph.add_edges_from(list(subG.edge_list()))
+        nx.set_edge_attributes(nx_graph, weights, "weight")
+        ebc = nx.edge_betweenness_centrality(nx_graph, normalized=False, weight="weight")
+
+    X_scaled_dict = scale_dict_values(ebc, feature_range)  # type: ignore
+    skipped_edges = set(G.edge_list()).difference(X_scaled_dict.keys())
+    X_scaled_dict.update(dict.fromkeys(skipped_edges, feature_range[0]))
+
+    return X_scaled_dict
+
+
+def get_combined_betweenness_edge_weights(
+    G: PyDiGraph, data: dict[str, Any], feature_range: tuple[float, float] = (0.01, 1.0)
+) -> dict[tuple[int, int], float]:
+
+    # OQUILLAS_EYE is a bottleneck node that workers cannot traverse
+    OQUILLAS_EYE_IDX = {G.attrs["node_key_by_index"].inv[OQUILLAS_EYE_KEY]}
+
+    # The PyDiGraph edge betweenness uses unweighted edges yielding a better
+    # representation of overall flow between nodes.
+    omitted_nodes = OQUILLAS_EYE_IDX
+    rx_weights = get_scaled_edge_betweenness(G, data, feature_range, omitted_nodes, None)
+
+    # The networkx edge betweenness uses weighted edges.
+    # - exploration: yields a better visualization of the transit network's structural betweenness.
+    # - prize: yields a better visualization of the prize flow network's structural betweenness.
+    # Leaf nodes are omitted because when left in it skews visualization of the first hops.
+    omitted_nodes = {i for i in G.node_indices() if G.out_degree(i) == 1} | OQUILLAS_EYE_IDX
+    exploration_weights = get_scaled_edge_betweenness(G, data, feature_range, omitted_nodes, "exploration")
+    prize_weights = get_scaled_edge_betweenness(G, data, feature_range, omitted_nodes, "prize")
+
+    all_keys = exploration_weights.keys() | rx_weights.keys() | prize_weights.keys()
+    min_weight = feature_range[0]
+    avg_weights = {
+        k: (
+            rx_weights.get(k, min_weight)
+            + exploration_weights.get(k, min_weight)
+            + prize_weights.get(k, min_weight)
+        )
+        / 3
+        for k in all_keys
+    }
+
+    return avg_weights
+
+
+def add_edges_from_graph(fg: FeatureGroup, G: PyDiGraph, data: dict[str, Any], is_subgraph: bool):
+    coords: GraphCoords = G.attrs["coords"]
+
+    edge_weights = get_combined_betweenness_edge_weights(G, data, (1, 10))
+    for u_idx, v_idx in G.edge_list():
+        u_key = G[u_idx]["waypoint_key"]
+        v_key = G[v_idx]["waypoint_key"]
+        if v_idx < u_idx and SUPER_ROOT not in [u_key, v_key]:
+            weight = edge_weights[(u_idx, v_idx)]
+            opacity = (weight - 1) / 10
+            if is_subgraph:
+                opacity = 0.75 + 0.25 * opacity
+            else:
+                opacity = 0.5 + 0.5 * opacity
+
+            PolyLine(
+                locations=coords.as_geographics([u_idx, v_idx]),
+                color=SUBGRAPH_EDGE_COLOR if is_subgraph else MAIN_GRAPH_EDGE_COLOR,
+                weight=weight,
+                opacity=opacity,
+                popup=f"Edge: {u_key} - {v_key}",
+                tooltip=f"Edge: {u_key} - {v_key}",
+            ).add_to(fg)
+
+
+def add_node_markers_from_graph(fg: FeatureGroup, G: PyDiGraph, data: dict[str, Any], is_subgraph: bool):
+    coords = G.attrs["coords"]
+    for node_idx in G.node_indices():
+        node = G[node_idx]
+        key = G[node_idx]["waypoint_key"]
+        cost = G[node_idx]["need_exploration_point"]
+        popup_text = f"Node Key: {key}, Cost: {cost}"
+
+        if key == SUPER_ROOT:
             popup_text += " (Super Root)"
             node_color = SUPER_ROOT_COLOR
+            circle_radius = ROOT_CIRCLE_RADIUS
+        elif node["is_base_town"]:
+            node_color = ROOT_NODE_COLOR
+            circle_radius = ROOT_CIRCLE_RADIUS
+        else:
+            node_color = SUB_GRAPH_NODE_COLOR if is_subgraph else MAIN_GRAPH_NODE_COLOR
+            circle_radius = SUB_GRAPH_CIRCLE_RADIUS if is_subgraph else NODE_CIRCLE_RADIUS
 
-        if node_color is None:
-            if node["is_base_town"]:
-                node_color = base_town_colors[node_key]
-            else:
-                node_color = REGULAR_NODE_COLOR
-
-        folium.CircleMarker(
-            location=(lat, lng),
-            radius=1 if not node["is_base_town"] else 4,
-            color=node_color,  # type: ignore
-            fill=True,
-            fill_color=node_color,  # type: ignore
+        CircleMarker(
+            location=coords.as_geographic(node_idx),
+            radius=circle_radius,
+            color=node_color,
+            fill_color=node_color,
             popup=popup_text,
             tooltip=popup_text,
         ).add_to(fg)
 
 
+def read_rings_csv(csv_path: str = "tr_coverage_report.csv") -> pd.DataFrame | None:
+    try:
+        df = pd.read_csv(csv_path)
+        logger.debug(f"Loaded {len(df)} rows from {csv_path}")
+
+        # Filter to per-ring rows only (numeric indices)
+        ring_df = df[
+            (pd.to_numeric(df["ring_index"], errors="coerce") >= 0)
+            & (~df["ring_index"].astype(str).str.startswith("bin_"))
+        ].copy()
+
+        if ring_df.empty:
+            logger.warning(f"No ring data found in {csv_path} — skipping overlays.")
+            return None
+    except FileNotFoundError:
+        logger.warning(f"CSV not found: '{csv_path}' — skipping overlays.")
+        return None
+
+    return ring_df
+
+
+def concave_hull_from_linestrings(G: PyDiGraph, node_indices: set[int]):
+    coords = G.attrs["coords"]
+    subG = subgraph_stable(G, node_indices)
+
+    lines = [LineString(coords.as_cartesians(e)) for e in subG.edge_list() if e[0] < e[1]]
+    if not lines:
+        return None
+    ml = MultiLineString(lines)
+
+    buffer_dist = G.attrs.get("visual_buffer_dist", 2.0)
+    buffered = ml.buffer(buffer_dist, cap_style="round", join_style="mitre")
+    if buffered.is_empty:
+        return None
+
+    merged = unary_union(buffered)
+    if isinstance(merged, MultiPolygon):
+        merged = max(merged.geoms, key=lambda p: p.area)
+
+    return merged
+
+
+def get_binned_root_rings(
+    root_key: int, ring_df: pd.DataFrame, bin_count: int = 5, max_cum_pct: float = 50.0
+):
+    rings = ring_df[ring_df["root"] == root_key].copy()
+    if rings.empty:
+        return []
+
+    # Gather rings up to ring that _includes_ max_cum_pct
+    starting_root_ring_count = len(rings)
+    rings = rings.sort_values("Cum%Prize")
+    cutoff_idx = rings["Cum%Prize"].searchsorted(max_cum_pct, side="right")
+    rings = rings.iloc[: cutoff_idx + 1]
+    if rings.empty:
+        return []
+    post_cutoff_root_ring_count = len(rings)
+
+    # Re-aggregate rings to bin_count bin groups
+    num_rings = len(rings)
+    effective_bin_count = max(1, min(bin_count, num_rings))
+    rings_per_bin = max(1, num_rings // effective_bin_count)
+    extra = num_rings % effective_bin_count
+
+    binned_rings = []
+    start = 0
+    for b in range(effective_bin_count):
+        end = start + rings_per_bin + (1 if b < extra else 0)
+        end = min(end, num_rings)
+        if start < end:
+            last_ring = rings.iloc[end - 1]
+            try:
+                hull = ast.literal_eval(last_ring["hull_nodes"])
+            except (ValueError, SyntaxError) as e:
+                logger.error(f"Bad hull_nodes in ring {end - 1}: {e} | row: {last_ring}")
+                hull = []
+            binned_rings.append({"hull_nodes": hull, "cum_pct": last_ring["Cum%Prize"]})
+        start = end
+
+    num_bins = len(binned_rings)
+    logger.info(
+        f"{root_key=}, {bin_count=}, {starting_root_ring_count=}, {cutoff_idx=}, {post_cutoff_root_ring_count=}, {effective_bin_count=}, {num_bins=}"
+    )
+
+    return binned_rings
+
+
 def add_root_coverage_overlays(
-    m: folium.Map,
+    m: Map,
     G,
     csv_path: str = "tr_coverage_report.csv",
     bin_count: int = 5,
     max_cum_pct: float = 50.0,
 ):
-    try:
-        df = pd.read_csv(csv_path)
-        logger.debug(f"Loaded {len(df)} rows from {csv_path}")
-    except FileNotFoundError:
-        logger.warning(f"CSV not found: '{csv_path}' — skipping overlays.")
+    ring_df = read_rings_csv(csv_path)
+    if ring_df is None:
         return None, {}
-
-    import ast  # For parsing str lists
-
-    node_key_by_index = G.attrs["node_key_by_index"]
-    root_indices = G.attrs["root_indices"]
-
-    # Filter to per-ring rows only (numeric indices)
-    ring_df = df[
-        (pd.to_numeric(df["ring_index"], errors="coerce") >= 0)
-        & (~df["ring_index"].astype(str).str.startswith("bin_"))
-    ].copy()
-
-    if ring_df.empty:
-        return None, {}
-
-    # Unique hue per root
-    base_towns = sorted(node["waypoint_key"] for node in G.nodes() if node["is_town"])
-    root_colors = {waypoint: MARKER_COLORS[i] for i, waypoint in enumerate(base_towns)}
-
-    def gradient_for_root(rgb, n_bins):
-        base = np.array(rgb)
-        white = np.array([1, 1, 1])
-        factors = np.linspace(0.85, 0.35, n_bins)
-        return [mcolors.to_hex(base * f + white * (1 - f)) for f in factors]
 
     fg_root_coverage_master = FeatureGroup(name="All Root Coverage", show=True)
     fg_root_coverage_master.add_to(m)
     assert isinstance(fg_root_coverage_master, FeatureGroup)
-
     root_coverage_feature_groups: dict[int, FeatureGroupSubGroup] = {}
 
-    for root_idx in root_indices:
-        root_key = node_key_by_index[root_idx]
-        root_rings = ring_df[ring_df["root"] == root_key].copy()
-        if root_rings.empty:
+    for root_idx in G.attrs["root_indices"]:
+        key = G[root_idx]["waypoint_key"]
+        binned_rings = get_binned_root_rings(key, ring_df, bin_count, max_cum_pct)
+        if not binned_rings:
             continue
 
-        # Ensure ring containing max_cum_pct is included!
-        starting_root_ring_count = len(root_rings)
-        root_rings = root_rings.sort_values("Cum%Prize")
-        cutoff_idx = root_rings["Cum%Prize"].searchsorted(max_cum_pct, side="right")
-        root_rings = root_rings.iloc[: cutoff_idx + 1]
-        if root_rings.empty:
-            continue
-        post_cutoff_root_ring_count = len(root_rings)
-
-        # Re-aggregate to bins post-cutoff (group rings into bin_count)
-        num_rings = len(root_rings)
-        effective_bin_count = max(1, min(bin_count, num_rings))  # <--- THIS LINE IS CRUCIAL
-        rings_per_bin = max(1, num_rings // effective_bin_count)
-        extra = num_rings % effective_bin_count
-
-        binned_rings = []
-        start = 0
-        for b in range(effective_bin_count):
-            end = start + rings_per_bin + (1 if b < extra else 0)
-            end = min(end, num_rings)  # safety (still good to keep)
-            if start < end:
-                last_ring = root_rings.iloc[end - 1]
-                try:
-                    hull = ast.literal_eval(last_ring["hull_nodes"])
-                except (ValueError, SyntaxError) as e:
-                    logger.error(f"Bad hull_nodes in ring {end - 1}: {e} | row: {last_ring}")
-                    hull = []
-                binned_rings.append({"hull_nodes": hull, "cum_pct": last_ring["Cum%Prize"]})
-            start = end
-
-        num_bins = len(binned_rings)
-        if num_bins == 0:
-            continue
-
-        logger.info(
-            f"{root_key=}, {bin_count=}, {starting_root_ring_count=}, {post_cutoff_root_ring_count=}, {effective_bin_count=}, {num_bins=}"
-        )
-
-        fg_root_coverage = FeatureGroupSubGroup(fg_root_coverage_master, name=f"Root {root_key}", show=False)
+        fg_root_coverage = FeatureGroupSubGroup(fg_root_coverage_master, name=f"Root {key}", show=False)
         fg_root_coverage.add_to(m)
-        root_coverage_feature_groups[root_key] = fg_root_coverage
+        root_coverage_feature_groups[key] = fg_root_coverage
 
-        bin_colors = gradient_for_root(root_colors[G[root_idx]["waypoint_key"]], num_bins)
-
-        alpha = G.attrs["alpha"]
-        scaled_coords = G.attrs["scaled_coords"]
         for bin_idx, bin_info in enumerate(reversed(binned_rings)):
-            coords_cartesian = scaled_coords(bin_info["hull_nodes"])
-            try:
-                hull = alphashape.alphashape(coords_cartesian, alpha)
-                hull = hull.buffer(0.5)  # type: ignore
-            except Exception as e:
-                logger.warning(f"Alpha shape failed for root {root_key}, bin {bin_idx}: {e}")
+            poly = concave_hull_from_linestrings(G, set(bin_info["hull_nodes"]))
+            if poly is None or poly.is_empty:
                 continue
+            poly = poly.buffer(0.8).buffer(-0.4)
 
-            if hull.is_empty:  # type: ignore
-                logger.debug(f"Empty hull for root {root_key}, bin {bin_idx}")
-                continue
-
-            polygons = (
-                [hull]
-                if isinstance(hull, Polygon)
-                else list(hull.geoms)
-                if isinstance(hull, MultiPolygon)
-                else []
-            )
-            color = bin_colors[bin_idx]
-            for poly in polygons:
-                ext = [(y, x) for x, y in poly.exterior.coords]
-                folium.Polygon(
-                    locations=ext,
-                    color=color,
+            polygons = [poly] if isinstance(poly, Polygon) else list(poly.geoms)
+            for p in polygons:
+                FoliumPolygon(
+                    locations=[(y, x) for x, y in p.exterior.coords],
+                    color="white",
                     weight=2,
-                    fill=True,
-                    fillColor=color,
-                    fillOpacity=0.25,
+                    fillColor="white",
+                    fillOpacity=0.3,
                     popup=(
-                        f"<b>Root:</b> {root_key}<br>"
-                        f"<b>Value bin:</b> {bin_idx + 1}<br>"
-                        f"<b>Cum prize:</b> {bin_info['cum_pct']:.1f}%"
+                        f"<b>Root:</b> {key}<br>"
+                        f"<b>Bin:</b> {bin_idx + 1}<br>"
+                        f"<b>Prize coverage:</b> {bin_info['cum_pct']:.1f}%"
                     ),
                 ).add_to(fg_root_coverage)
 
@@ -253,75 +370,228 @@ def add_root_coverage_overlays(
 
 
 def add_terminal_sets_markers(
-    m: folium.Map, graph: rx.PyGraph | rx.PyDiGraph
-) -> tuple[folium.FeatureGroup | None, dict[str, FeatureGroupSubGroup]]:
-    if "terminal_sets" not in graph.attrs:
+    m: Map, G: PyDiGraph
+) -> tuple[FeatureGroup | None, dict[str, FeatureGroupSubGroup]]:
+    if "terminal_sets" not in G.attrs:
         print("Warning: terminal_sets attribute not found in graph.")
         return None, {}
 
-    terminal_sets = graph.attrs["terminal_sets"]
-    base_towns = sorted(node["waypoint_key"] for node in graph.nodes() if node["is_town"])
-    base_town_colors = {waypoint: MARKER_COLORS[i] for i, waypoint in enumerate(base_towns)}
+    def add_marker(type: str, location: tuple[float, float], key: int, cost: int, parent_fg):
+        Marker(
+            location=location,
+            icon=BeautifyIcon(
+                icon="house" if type == "Root" else "",
+                icon_shape="marker",
+                iconSize=[30, 30] if type == "Root" else [20, 20],
+                iconAnchor=[15, 15] if type == "Root" else [10, 20],
+                background_color="white",
+                text_color="white",
+                border_color="white",
+            ),  # type: ignore
+            popup=f"{type} Node Key: {key}, Cost: {cost}",
+            tooltip=f"{type} Node Key: {key}, Cost: {cost}",
+        ).add_to(parent_fg)
 
     fg_terminal_sets_master = FeatureGroup(name="All Terminal Sets", show=True)
     fg_terminal_sets_master.add_to(m)
     assert isinstance(fg_terminal_sets_master, FeatureGroup)
-
     terminal_set_feature_groups: dict[str, FeatureGroupSubGroup] = {}
 
-    for color_index, (root, terminal_set) in enumerate(terminal_sets.items()):
-        layer_name = f"Terminal Set {graph[root]['waypoint_key']}"
+    coords = G.attrs["coords"]
+    terminal_sets = G.attrs["terminal_sets"]
+
+    for root, terminal_set in terminal_sets.items():
+        layer_name = f"Terminal Set {G[root]['waypoint_key']}"
         fg_terminal_set = FeatureGroupSubGroup(fg_terminal_sets_master, name=layer_name, show=False)
         fg_terminal_set.add_to(m)
         terminal_set_feature_groups[layer_name] = fg_terminal_set
 
-        root_node = graph[root]
-        root_lng = root_node["position"]["x"] / TILE_SCALE
-        root_lat = root_node["position"]["z"] / TILE_SCALE
-        terminal_set_color = base_town_colors[root_node["waypoint_key"]]
-
-        folium.Marker(
-            location=(root_lat, root_lng),
-            icon=BeautifyIcon(
-                icon="house",
-                icon_shape="marker",
-                background_color=distinctipy.get_hex(terminal_set_color),
-                text_color="white",
-                border_color="white",
-            ),  # type: ignore
-            popup=f"Root Node Key: {root_node['waypoint_key']}, Cost: {root_node['need_exploration_point']}",
-            tooltip=f"Root Node Key: {root_node['waypoint_key']}, Cost: {root_node['need_exploration_point']}",
-        ).add_to(fg_terminal_set)
+        cost = G[root]["need_exploration_point"]
+        key = G[root]["waypoint_key"]
+        location = coords.as_geographic(root)
+        add_marker("Root", location, key, cost, fg_terminal_set)
 
         for terminal in terminal_set:
-            terminal_node = graph[terminal]
-            terminal_lng = terminal_node["position"]["x"] / TILE_SCALE
-            terminal_lat = terminal_node["position"]["z"] / TILE_SCALE
-
-            folium.Marker(
-                location=(terminal_lat, terminal_lng),
-                icon=BeautifyIcon(
-                    icon="",
-                    iconSize=[20, 20],
-                    iconAnchor=[10, 20],
-                    icon_shape="marker",
-                    background_color=distinctipy.get_hex(terminal_set_color),
-                    text_color="transparent",
-                    border_color="white",
-                ),  # type: ignore
-                popup=f"Terminal Node Key: {terminal_node['waypoint_key']}, Cost: {terminal_node['need_exploration_point']}",
-                tooltip=f"Terminal Node Key: {terminal_node['waypoint_key']}, Cost: {terminal_node['need_exploration_point']}",
-            ).add_to(fg_terminal_set)
+            cost = G[terminal]["need_exploration_point"]
+            key = G[terminal]["waypoint_key"]
+            location = coords.as_geographic(terminal)
+            add_marker("Terminal", location, key, cost, fg_terminal_set)
 
     return fg_terminal_sets_master, terminal_set_feature_groups
 
 
+def recolorize(m):
+    """
+    Recompute conflict-free colors for all root regions and their terminals,
+    based on the final polygon geometries already added to the map.
+    """
+    ROOT_RE = re.compile(r"Root (\d+)")
+    TERM_RE = re.compile(r"Terminal Set (\d+)")
+
+    # ------------------------------------------------------------
+    # 1. Extract polygons grouped by root_id
+    # ------------------------------------------------------------
+    root_polys = {}  # root_id -> [shapely_poly, ...]
+    fg_lookup_coverage = {}  # root_id -> list of FGSubGroups for coverage
+    fg_lookup_terminal = {}  # root_id -> list of FGSubGroups for terminals
+
+    for _, fg in m._children.items():
+        if not isinstance(fg, FeatureGroupSubGroup):
+            continue
+        name = getattr(fg, "layer_name", None)
+        if not isinstance(name, str):
+            continue
+
+        # Root overlays
+        m_root = ROOT_RE.fullmatch(name)
+        if m_root:
+            root = int(m_root.group(1))
+            fg_lookup_coverage.setdefault(root, []).append(fg)
+            for child in fg._children.values():
+                if child._name == "Polygon":
+                    poly = Polygon([(lng, lat) for lat, lng in child.locations])  # type: ignore
+                    root_polys.setdefault(root, []).append(poly)
+
+        # Terminal sets
+        m_term = TERM_RE.fullmatch(name)
+        if m_term:
+            root = int(m_term.group(1))
+            fg_lookup_terminal.setdefault(root, []).append(fg)
+
+    if not root_polys:
+        logger.warning("No root polygons found in map... skipping recoloring.")
+        return
+
+    # ------------------------------------------------------------
+    # 2. Unified polygon per root (for conflict detection)
+    # ------------------------------------------------------------
+    unified = {root: unary_union(polys) for root, polys in root_polys.items()}
+
+    # ------------------------------------------------------------
+    # 3. Build conflict graph
+    # ------------------------------------------------------------
+    roots = list(unified.keys())
+    conflicts = {r: set() for r in roots}
+    for i in range(len(roots)):
+        r1, p1 = roots[i], unified[roots[i]]
+        for j in range(i + 1, len(roots)):
+            r2, p2 = roots[j], unified[roots[j]]
+            if p1.intersects(p2):
+                conflicts[r1].add(r2)
+                conflicts[r2].add(r1)
+
+    # ------------------------------------------------------------
+    # 4. DSATUR coloring
+    # ------------------------------------------------------------
+    color_of = {}
+    saturation = {r: 0 for r in roots}
+
+    def choose_next():
+        return max((r for r in roots if r not in color_of), key=lambda r: (saturation[r], len(conflicts[r])))
+
+    while len(color_of) < len(roots):
+        r = choose_next()
+        neighbor_colors = {color_of[n] for n in conflicts[r] if n in color_of}
+        c = 0
+        while c in neighbor_colors:
+            c += 1
+        color_of[r] = c
+        for n in conflicts[r]:
+            if n not in color_of:
+                neighbor_c = {color_of[x] for x in conflicts[n] if x in color_of}
+                saturation[n] = len(neighbor_c)
+
+    # ------------------------------------------------------------
+    # 5. Generate root colors
+    # ------------------------------------------------------------
+    # fmt: off
+    PALETTE = [
+        "#E6194B", "#3CB44B", "#FFE119", "#4363D8", "#F58231", "#911EB4", "#42D4F4",
+        "#F032E6", "#BFEF45", "#FABED4", "#469990", "#DCBEFF", "#9A6324", "#800000",
+        "#AAFFC3", "#808000", "#FFD8B1", "#000075", "#FF4500", "#00FA9A", "#FF1493",
+        "#00CED1", "#9400D3", "#FF8C00", "#32CD32", "#8A2BE2", "#B22222", "#228B22",
+        "#9932CC", "#FF6347", "#40E0D0", "#EE82EE", "#D2691E", "#CD5C5C", "#00FF7F",
+        "#DC143C", "#ADFF2F", "#FF00FF", "#1E90FF", "#FF69B4", "#00FF00", "#FF0000",
+        "#0000FF", "#FFFF00",
+    ]
+    # fmt: on
+
+    max_c_idx = max(color_of.values())
+    n_needed = max_c_idx + 1
+    if n_needed <= len(PALETTE):
+        root_colors = PALETTE[:n_needed]
+    else:
+        # Fallback: cycle with slight HSV shift (very rare)
+        base = PALETTE
+        root_colors = []
+        for i in range(n_needed):
+            idx = i % len(base)
+            r, g, b = mcolors.to_rgb(base[idx])
+            h, s, v = colorsys.rgb_to_hsv(r, g, b)
+            h = (h + 0.17 * (i // len(base))) % 1.0
+            s = min(1.0, s * 1.1)
+            v = min(1.0, v * 1.1)
+            root_colors.append(mcolors.to_hex(colorsys.hsv_to_rgb(h, s, v)))
+    logger.info(f"Root colors: {root_colors}")
+
+    # ------------------------------------------------------------
+    # 6. Gradient generator for bins (vibrant, noticeable)
+    # ------------------------------------------------------------
+    def gradient_for_root(base_hex: str, n_bins: int) -> list[str]:
+        """
+        - Bin 0 (innermost): 90% of base color (dark, rich)
+        - Bin N (outermost): 50% base + 50% white → still recognizable, never gray/pale
+        """
+        if n_bins <= 0:
+            return []
+        if n_bins == 1:
+            return [base_hex]
+
+        base_rgb = np.array(mcolors.to_rgb(base_hex))
+
+        # Inner: slightly darkened version
+        dark = base_rgb * 0.9
+        dark = np.clip(dark, 0, 1)
+
+        # Outer: blend toward white, cap at 50% to avoid washout
+        light = base_rgb * 0.6 + np.array([0.4, 0.4, 0.4])
+        colors = np.linspace(dark, light, n_bins)
+
+        return [mcolors.to_hex(c.clip(0, 1)) for c in colors]
+
+    # ------------------------------------------------------------
+    # 7. Apply colors to all coverage and terminals
+    # ------------------------------------------------------------
+    for root in fg_lookup_coverage:
+        c_idx = color_of[root]
+        base_color = root_colors[c_idx]
+        logger.debug(f"Applying color {base_color} (index {c_idx}) to root {root}")
+
+        # Apply gradient to coverage bins
+        for fg in fg_lookup_coverage[root]:
+            n_bins = len(fg._children)
+            colors = gradient_for_root(base_color, n_bins)
+            for child, color in zip(fg._children.values(), colors):
+                if hasattr(child, "locations") and isinstance(child.locations, list):
+                    child.options["color"] = color
+                    child.options["fillColor"] = color
+                    child.options["fillOpacity"] = 0.35
+
+        # Terminals: use base color (same as root)
+        for fg in fg_lookup_terminal.get(root, []):
+            for child in fg._children.values():
+                if hasattr(child, "icon"):
+                    child.icon.options["background_color"] = base_color
+
+
 def visualize_solution_graph(
-    main_graph: rx.PyGraph | rx.PyDiGraph,
-    subgraph: rx.PyGraph | rx.PyDiGraph | None = None,
+    main_graph: PyDiGraph,
+    data: dict[str, Any],
+    sub_graph: PyDiGraph | None = None,
     bin_count: int = 5,
+    max_cum_pct: float = 50.0,
 ):
-    m = folium.Map(
+    m = Map(
         crs="Simple",
         location=[32.5, 0],
         zoom_start=1.9,  # type: ignore
@@ -329,10 +599,10 @@ def visualize_solution_graph(
         tiles=None,
     )
 
-    tile_pane = folium.map.CustomPane("tile_pane", z_index=1)  # type: ignore
+    tile_pane = CustomPane("tile_pane", z_index=1)  # type: ignore
     m.add_child(tile_pane)
 
-    tile_layer = folium.TileLayer(
+    tile_layer = TileLayer(
         name="BDO Router",
         attr="Map Tiles @ BDO",
         min_zoom=1,
@@ -344,55 +614,51 @@ def visualize_solution_graph(
     )
     tile_layer.add_to(m)
 
-    fg_all_nodes = folium.FeatureGroup(name="All Nodes", show=True)
-    fg_main_graph_edges = folium.FeatureGroup(name="Main Graph Edges", show=True)
-    fg_subgraph_edges = folium.FeatureGroup(name="Subgraph Edges", show=True)
+    fg_main_graph_nodes = FeatureGroup(name="Main Graph Nodes", show=True)
+    fg_sub_graph_nodes = FeatureGroup(name="Subgraph Nodes", show=True)
+    fg_main_graph_edges = FeatureGroup(name="Main Graph Edges", show=True)
+    fg_sub_graph_edges = FeatureGroup(name="Subgraph Edges", show=True)
 
-    add_node_markers_from_graph(fg_all_nodes, subgraph if subgraph else main_graph)
+    logger.info("    setting up main graph...")
+    add_node_markers_from_graph(fg_main_graph_nodes, main_graph, data, is_subgraph=False)
+    add_edges_from_graph(fg_main_graph_edges, main_graph, data, is_subgraph=False)
 
-    add_edges_from_graph(
-        fg_main_graph_edges,
-        main_graph,
-        color=MAIN_GRAPH_EDGE_COLOR,
-        weight=MAIN_GRAPH_EDGE_WEIGHT,
-    )
-
-    if subgraph:
-        add_edges_from_graph(
-            fg_subgraph_edges,
-            subgraph,
-            color=SUBGRAPH_EDGE_COLOR,
-            weight=SUBGRAPH_EDGE_WEIGHT,
-        )
+    if sub_graph is not None:
+        logger.info("    setting up subgraph...")
+        add_node_markers_from_graph(fg_sub_graph_nodes, sub_graph, data, is_subgraph=True)
+        add_edges_from_graph(fg_sub_graph_edges, sub_graph, data, is_subgraph=True)
 
     fg_terminal_master, terminal_groups = add_terminal_sets_markers(m, main_graph)
-    assert isinstance(fg_terminal_master, folium.FeatureGroup)
+    assert isinstance(fg_terminal_master, FeatureGroup)
 
     fg_root_coverage_master, root_coverage_subgroups = add_root_coverage_overlays(
         m,
         main_graph,
         bin_count=bin_count,
-        max_cum_pct=50,
+        max_cum_pct=max_cum_pct,
     )
-    assert isinstance(fg_root_coverage_master, folium.FeatureGroup)
+    assert isinstance(fg_root_coverage_master, FeatureGroup)
 
-    fg_all_nodes.add_to(m)
+    fg_main_graph_nodes.add_to(m)
+    fg_sub_graph_nodes.add_to(m)
     fg_main_graph_edges.add_to(m)
-    fg_subgraph_edges.add_to(m)
+    fg_sub_graph_edges.add_to(m)
+    recolorize(m)
 
     m.keep_in_front(
         fg_main_graph_edges,
         fg_root_coverage_master,
         *root_coverage_subgroups.values(),
-        fg_subgraph_edges,
-        fg_all_nodes,
+        fg_sub_graph_edges,
+        fg_main_graph_nodes,
+        fg_sub_graph_nodes,
         fg_terminal_master,
         *terminal_groups.values(),
     )
 
     group_layer_control = GroupedLayerControl(
         groups={
-            "Base": [fg_all_nodes, fg_main_graph_edges, fg_subgraph_edges],
+            "Base": [fg_main_graph_nodes, fg_sub_graph_nodes, fg_main_graph_edges, fg_sub_graph_edges],
         },
         collapsed=False,
         exclusive_groups=False,
@@ -428,24 +694,97 @@ def visualize_solution_graph(
     webbrowser.open("file://" + tmp_file)
 
 
+def main(config: dict[str, Any], kwargs: dict[str, Any]):
+    lodging = kwargs["min_lodging"]
+    prices = kwargs["prices"]
+    modifiers = kwargs["modifiers"]
+    grindTakenList = kwargs["grind_taken_list"]
+    bin_count = kwargs["bin_count"]
+    max_cum_pct = kwargs["max_cum_pct"]
+    solution_terminals = kwargs["solution_terminals"]
+    solution_nodes = kwargs["solution_nodes"]
+
+    data = generate_reference_data(config, prices, modifiers, lodging, grindTakenList)
+    generate_graph_data(data)
+    solver_graph = deepcopy(data["G"].copy())
+    solver_graph.attrs = deepcopy(data["G"].attrs)
+    data["solver_graph"] = solver_graph
+
+    reduce_prize_data(data)
+
+    G = data["solver_graph"]
+    assert isinstance(G, PyDiGraph)
+
+    prune_NTD1(G)
+    G.attrs["shortest_paths"] = get_all_pairs_shortest_paths(G)
+    G.attrs["all_shortest_paths"] = get_all_pairs_all_shortest_paths(G)
+    add_scaled_coords_to_graph(G)
+
+    # Ensure all solution terminals are in the solution nodes.
+    solution_nodes.update(key for key in solution_terminals.keys())
+    solution_nodes.update(key for key in solution_terminals.values())
+
+    node_key_by_index = G.attrs["node_key_by_index"]
+    solution_indices = [node_key_by_index.inv[key] for key in solution_nodes]
+
+    subG = subgraph_stable(G, solution_indices)
+    assert isinstance(subG, PyDiGraph)
+    subG.attrs = G.attrs
+    if SUPER_ROOT in solution_terminals.values():
+        from api_rx_pydigraph import inject_super_root
+
+        inject_super_root(config, G)
+    set_graph_terminal_sets_attribute(subG, solution_terminals)
+
+    cost = sum(node["need_exploration_point"] for node in subG.nodes())
+    print(f"Cost of highlighted nodes: {cost}")
+
+    visualize_solution_graph(
+        main_graph=G,
+        data=data,
+        sub_graph=subG,
+        bin_count=bin_count,
+        max_cum_pct=max_cum_pct,
+    )
+
+
 if __name__ == "__main__":
-    data = {}
-    data["exploration"] = get_clean_exploration_data({})
+    # Common config
+    budget = 500
 
     config = {}
+    config["name"] = "Empire"
+    config["budget"] = budget  # N/A
+    config["top_n"] = 24  # all prizes
+    config["nearest_n"] = 24  # all roots
+    config["max_waypoint_ub"] = 30  # N/A
+
+    config["prune_prizes"] = False
+    prize_t = 1 - (budget * 0.0005)
+    config["prize_pruning_threshold_factors"] = {
+        "min": {"only_child": prize_t, "dominant": prize_t, "protected": prize_t},
+        "max": {"only_child": 1, "dominant": 1, "protected": 1},
+    }
+    config["capacity_mode"] = "min"
+    config["solver"] = {}  # N/A
+
     config["logger"] = {"level": "INFO", "format": "<level>{message}</level>"}
     set_logger(config)
 
-    config["exploration_data"] = {"directed": True, "edge_weighted": False, "omit_great_ocean": True}
-    G = get_exploration_graph(config)
-    assert isinstance(G, rx.PyDiGraph)
-
-    root_indices = [i for i in G.node_indices() if G[i]["is_worker_npc_town"]]
-    root_waypoints = {G[i]["waypoint_key"] for i in root_indices}
+    # Common data
+    kwargs = {
+        "prices": ds.read_json("en_lta_prices.json")["effectivePrices"],
+        "modifiers": {},
+        "grind_taken_list": [],
+        "min_lodging": ds.read_json("lodging_specifications.json")["min"],
+        "max_lodging": ds.read_json("lodging_specifications.json")["max"],
+        "bin_count": 4,
+        "max_cum_pct": 35.0,
+    }
 
     # fmt: off
     # MARK: Subgraph
-    terminals = {
+    solution_terminals = {
         131: 1, 132: 1, 135: 1, 136: 1, 144: 61, 160: 1, 171: 61, 172: 61, 175: 61, 176: 61,
         183: 1, 184: 61, 188: 61, 203: 61, 435: 301, 436: 301, 438: 301, 439: 301, 440: 301,
         443: 301, 455: 301, 464: 301, 476: 301, 480: 301, 488: 301, 840: 601, 841: 601,
@@ -471,8 +810,7 @@ if __name__ == "__main__":
         1914: 301, 2037: 2001, 2038: 2001, 2039: 2001, 2040: 2001, 2044: 2001, 2045: 2001,
         2046: 2001, 2047: 2001, 2048: 2001, 2049: 2001, 2050: 2001
     }
-
-    highlights = set([
+    solution_nodes = set([
         1,21,22,24,42,45,46,48,49,61,64,66,67,131,132,135,136,144,160,171,172,175,176,183,
         184,188,203,301,302,305,309,322,323,324,327,341,344,345,347,372,435,436,438,439,
         440,443,455,464,476,480,488,601,602,608,609,624,628,629,633,638,651,652,656,660,
@@ -498,28 +836,9 @@ if __name__ == "__main__":
     ])
     # fmt: on
 
-    terminals = dict(sorted(terminals.items(), key=lambda item: item[1]))
+    solution_terminals = dict(sorted(solution_terminals.items(), key=lambda item: item[1]))
 
-    if SUPER_ROOT in terminals.values():
-        inject_super_root(config, G)
-    set_graph_terminal_sets_attribute(G, terminals)
-    G.attrs["root_indices"] = root_indices
-    G.attrs["terminal_indices"] = [i for i in G.node_indices() if G[i]["is_workerman_plantzone"]]
-    add_scaled_coords_to_graph(G)
+    kwargs["solution_terminals"] = solution_terminals
+    kwargs["solution_nodes"] = solution_nodes
 
-    highlights.update(key for key in terminals.keys())
-    highlights.update(key for key in terminals.values())
-    waypoint_to_index = {node["waypoint_key"]: i for i, node in enumerate(G.nodes())}
-    highlight_indices = [waypoint_to_index[key] for key in highlights]
-
-    highlight_graph = subgraph_stable(G, highlight_indices)
-    highlight_graph.attrs = G.attrs
-
-    cost = sum(node["need_exploration_point"] for node in highlight_graph.nodes())
-    print(f"Cost of highlighted nodes: {cost}")
-
-    visualize_solution_graph(
-        main_graph=G,
-        subgraph=highlight_graph,
-        bin_count=20,
-    )
+    main(config, kwargs)

@@ -1,7 +1,10 @@
 # api_exploration_graph.py
 
+from collections.abc import Iterable
+
 from bidict import bidict
 import rustworkx as rx
+from shapely.geometry import Point, MultiPoint
 
 from api_common import get_clean_exploration_data, TILE_SCALE
 
@@ -135,31 +138,72 @@ def get_exploration_graph(config: dict) -> rx.PyGraph | rx.PyDiGraph:
     return graph
 
 
-def populate_edge_weights(graph: rx.PyGraph | rx.PyDiGraph):
-    for u, v in graph.edge_list():
-        graph.update_edge(u, v, {"need_exploration_point": graph[v]["need_exploration_point"]})
+def populate_edge_weights(G: rx.PyGraph | rx.PyDiGraph):
+    for u, v in G.edge_list():
+        G.update_edge(u, v, {"need_exploration_point": G[v]["need_exploration_point"]})
 
 
-def has_edge_weights(graph: rx.PyGraph | rx.PyDiGraph) -> bool:
+def has_edge_weights(G: rx.PyGraph | rx.PyDiGraph) -> bool:
     has_edge_data = False
-    for edge in graph.edges():
+    for edge in G.edges():
         if edge is not None and edge.get("need_exploration_point") is not None:
             has_edge_data = True
             break
     return has_edge_data
 
 
-def get_all_pairs_shortest_paths(graph: rx.PyGraph | rx.PyDiGraph) -> dict[tuple[int, int], list[int]]:
-    if not has_edge_weights(graph):
-        populate_edge_weights(graph)
+def get_all_pairs_shortest_paths(G: rx.PyGraph | rx.PyDiGraph) -> dict[tuple[int, int], list[int]]:
+    if not has_edge_weights(G):
+        populate_edge_weights(G)
     shortest_paths = rx.all_pairs_dijkstra_shortest_paths(
-        graph, edge_cost_fn=lambda edge_data: edge_data["need_exploration_point"]
+        G, edge_cost_fn=lambda edge_data: edge_data["need_exploration_point"]
     )
     shortest_paths = {
         (u, v): list(path)
         for u, paths_from_source in shortest_paths.items()
         for v, path in paths_from_source.items()
     }
+    return shortest_paths
+
+
+def get_all_pairs_all_shortest_paths(G: rx.PyGraph | rx.PyDiGraph) -> dict[tuple[int, int], list[list[int]]]:
+    # This can take some time, so instead we can check if the graph is the same as the previous run
+    import data_store as ds
+    import hashlib
+
+    hash_filename = "graph_hash.txt"
+    current_hash = ds.read_text(hash_filename) if ds.is_file(hash_filename) else None
+    node_links = str(rx.node_link_json(G)).encode()
+    graph_hash = hashlib.sha256(node_links).hexdigest()
+
+    if graph_hash == current_hash:
+        print("  ...re-using existing shortest path data.")
+        json_data = ds.read_json("graph_all_pairs_all_shortest_paths.json")
+        shortest_paths = {
+            (int(u), int(v)): paths for pair, paths in json_data.items() for u, v in [pair.split(",")]
+        }
+    else:
+        print("  ...generating shortest path data.")
+        if not has_edge_weights(G):
+            populate_edge_weights(G)
+
+        def weight_fn(edge):
+            return edge["need_exploration_point"]
+
+        shortest_paths: dict[tuple[int, int], list[list[int]]] = {}
+        for u in list(G.node_indices()):
+            for v in list(G.node_indices()):
+                paths = rx.all_shortest_paths(G, u, v, weight_fn=weight_fn)
+                if paths and (u, v) not in shortest_paths:
+                    shortest_paths[(u, v)] = []
+                for path in paths:
+                    shortest_paths[(u, v)].append(path)
+
+        paths_out = {f"{k[0]},{k[1]}": v for k, v in shortest_paths.items()}
+        ds.write_json("graph_all_pairs_all_shortest_paths.json", paths_out)
+        ds_path = ds.path()
+        ds_path.joinpath(hash_filename).write_text(graph_hash, encoding="utf-8")
+
     return shortest_paths
 
 
@@ -306,40 +350,112 @@ def get_super_root(config: dict) -> dict:
     }
 
 
+class GraphCoords:
+    """
+    Handles coordinate extraction and mapping between geographic (lat/lon)
+    and scaled Cartesian (x/y) coordinates derived from graph node attributes x,z.
+    Assumes coords are nested under node["position"] with "x" (lon) and "z" (lat).
+    """
+
+    G: object  # PyDiGraph (or DiGraph-like)
+    scale: float  # scaling factor
+    xz: dict[int, tuple[float, float]]
+
+    def __init__(
+        self,
+        G,
+    ):
+        self.G = G
+        self.scale = TILE_SCALE
+        scale = self.scale
+
+        # Precompute scaled positions for all nodes (hardcoded to node exploration payload)
+        self.xz = {
+            n: (G[n]["position"]["x"] / scale, G[n]["position"]["z"] / scale) for n in G.node_indices()
+        }
+
+    # Single-node accessors
+    def as_cartesian(self, idx: int) -> tuple[float, float]:
+        """Return (x, y) Cartesian coords for a node."""
+        return self.xz[idx]
+
+    def as_geographic(self, idx: int) -> tuple[float, float]:
+        """Return (lat, lon) geographic coords."""
+        x, z = self.xz[idx]
+        return (z, x)
+
+    def as_cartesian_point(self, idx: int) -> Point:
+        """Return shapely Point(x, y)."""
+        x, z = self.xz[idx]
+        return Point(x, z)
+
+    def as_geographic_point(self, idx: int) -> Point:
+        """Return shapely Point(lon, lat)."""
+        lat, lon = self.as_geographic(idx)
+        return Point(lon, lat)
+
+    # Iterable versions (optional indices → all)
+    def _indices(self, indices: Iterable[int] | None) -> Iterable[int]:
+        """Internal helper: return provided indices or all graph nodes."""
+        return indices if indices is not None else self.xz.keys()
+
+    def as_cartesians(
+        self,
+        indices: Iterable[int] | None = None,
+    ) -> list[tuple[float, float]]:
+        """Return list of (x, y) Cartesian coords for nodes (all if indices=None)."""
+        return [self.as_cartesian(i) for i in self._indices(indices)]
+
+    def as_geographics(
+        self,
+        indices: Iterable[int] | None = None,
+    ) -> list[tuple[float, float]]:
+        """Return list of (lat, lon) geographic coords for nodes (all if indices=None)."""
+        return [self.as_geographic(i) for i in self._indices(indices)]
+
+    def as_cartesian_points(
+        self,
+        indices: Iterable[int] | None = None,
+    ) -> list[Point]:
+        """Return list of shapely Point(x, y) for nodes (all if indices=None)."""
+        return [self.as_cartesian_point(i) for i in self._indices(indices)]
+
+    def as_geographic_points(
+        self,
+        indices: Iterable[int] | None = None,
+    ) -> list[Point]:
+        """Return list of shapely Point(lon, lat) for nodes (all if indices=None)."""
+        return [self.as_geographic_point(i) for i in self._indices(indices)]
+
+    def as_cartesian_multipoint(self, indices: Iterable[int] | None = None) -> MultiPoint:
+        """Return all (or selected) scaled points as a MultiPoint."""
+        points = self.as_cartesian_points(indices)
+        return MultiPoint(points)
+
+    def as_geographic_multipoint(self, indices: Iterable[int] | None = None) -> MultiPoint:
+        """Return all (or selected) scaled points as a MultiPoint."""
+        points = self.as_geographic_points(indices)
+        return MultiPoint(points)
+
+
 def add_scaled_coords_to_graph(G) -> None:
-    """Canonical BDO version: uses TILE_SCALE = 12800."""
+    """Adds scaled coordinates utility to graph nodes as G.attrs["coords"].
+    Adds 'scale', 'alpha_analyze', 'alpha_visualize', 'scaled_coord', 'scaled_coords',
+    'scaled_point', 'scaled_points', 'node_indices_array', 'node_index_to_pos'
+    attributes to graph G as well.
+    """
     import numpy as np
-    from shapely.geometry import Point
 
     scale = TILE_SCALE
 
-    for idx in G.node_indices():
-        pos = G[idx]["position"]
-        x, z = float(pos["x"]), float(pos["z"])
-        G[idx]["scaled_coords"] = (x / scale, z / scale)
-
-    def scaled_coord(idx):
-        x, z = G[idx]["scaled_coords"]
-        return (z, x)
-
-    def scaled_coords(idxs):
-        return [G[idx]["scaled_coords"] for idx in idxs]
-
-    def scaled_point(idx):
-        x, z = G[idx]["scaled_coords"]
-        return Point(z, x)
-
-    def scaled_points(idxs):
-        return [scaled_point(idx) for idx in idxs]
-
     if not G.attrs:
         G.attrs = {}
+    G.attrs["coords"] = GraphCoords(G)
     G.attrs["scale"] = scale
-    G.attrs["alpha"] = 8.4 / scale  # 8.4 is the average non-terminal edge length
-    G.attrs["scaled_coord"] = scaled_coord
-    G.attrs["scaled_coords"] = scaled_coords
-    G.attrs["scaled_point"] = scaled_point
-    G.attrs["scaled_points"] = scaled_points
+    # 1 / 8.4 isn't convex enough; 8.4 is the average non-terminal edge length
+    G.attrs["alpha_analyze"] = 0
+    G.attrs["alpha_visualize"] = 0.15625
+    G.attrs["visual_buffer_dist"] = 0.1
 
     node_indices_list = list(G.node_indices())
     G.attrs["node_indices_array"] = np.array(node_indices_list, dtype=int)

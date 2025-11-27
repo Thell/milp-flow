@@ -1,6 +1,7 @@
 # data_store.py
 
 import importlib.resources
+
 import json
 from pathlib import Path
 from urllib import request
